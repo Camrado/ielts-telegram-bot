@@ -88,6 +88,64 @@ async def generate_vocab_entry(word: str, provided: dict[str, str]) -> dict[str,
             raise ValueError(f"Failed to parse AI response for '{word}'")
 
 
+async def generate_vocab_entries_partial(
+    entries: list[dict],
+) -> list[dict[str, str]]:
+    client = _get_client()
+
+    parts = []
+    for i, entry in enumerate(entries, 1):
+        lines = [f"Word {i}: {entry['word_phrase']}"]
+        for field in VOCAB_FIELDS:
+            val = entry.get(field)
+            if val:
+                lines.append(f"- {field}: PROVIDED ({val})")
+            else:
+                lines.append(f"- {field}: MISSING")
+        parts.append("\n".join(lines))
+
+    user_msg = (
+        "For each word below, generate ONLY the fields marked as MISSING. "
+        "Do not overwrite fields marked as PROVIDED. "
+        "Return a JSON array with one object per word.\n\n"
+        + "\n\n".join(parts)
+        + '\n\nFor each word, return: {"word_phrase": "...", "definition": "...", '
+        '"synonyms": "...", "collocations": "...", "example": "...", "cefr_level": "..."}\n'
+        "Include ALL fields in the response — copy PROVIDED values as-is "
+        "and fill in MISSING ones.\n"
+        "Respond ONLY with a valid JSON array, no markdown, no preamble."
+    )
+
+    for attempt in range(2):
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.7,
+        )
+        content = resp.choices[0].message.content
+        try:
+            results = _parse_json(content)
+            if not isinstance(results, list):
+                raise ValueError("Expected a JSON array")
+            for i, result in enumerate(results):
+                if i < len(entries):
+                    result["word_phrase"] = entries[i]["word_phrase"]
+            return results[: len(entries)]
+        except (json.JSONDecodeError, ValueError):
+            if attempt == 0:
+                logger.warning(
+                    "JSON parse failed for partial bulk, retrying. Raw: %s",
+                    content[:300],
+                )
+                continue
+            raise ValueError(
+                "Failed to parse AI response for partial bulk generation"
+            )
+
+
 async def generate_vocab_entries_bulk(words: list[str]) -> list[dict[str, str]]:
     client = _get_client()
 

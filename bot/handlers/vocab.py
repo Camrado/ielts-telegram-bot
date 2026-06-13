@@ -1,5 +1,7 @@
 import html
 import logging
+import os
+from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -20,7 +22,12 @@ from bot.models.vocabulary import (
     insert_words_bulk,
     update_word,
 )
-from bot.services.ai import generate_vocab_entries_bulk, generate_vocab_entry
+from bot.services.ai import (
+    generate_vocab_entries_bulk,
+    generate_vocab_entries_partial,
+    generate_vocab_entry,
+)
+from bot.services.file_parser import get_temp_path, parse_file
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +40,10 @@ ADD_EDITING = 4
 BULK_WAITING = 5
 BULK_CONFIRM = 6
 BULK_REVIEWING = 7
+BULK_METHOD = 8
+FILE_WAITING = 9
+
+ALL_VOCAB_FIELDS = ("definition", "synonyms", "collocations", "example", "cefr_level")
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
 
@@ -77,6 +88,22 @@ RETRY_KEYBOARD = InlineKeyboardMarkup(
 
 BACK_TO_VOCAB = InlineKeyboardMarkup(
     [[InlineKeyboardButton("◀️ Back to Vocabulary", callback_data="menu_vocab")]]
+)
+
+BULK_METHOD_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("📝 Word List", callback_data="vbulk_wordlist")],
+        [InlineKeyboardButton("📎 Upload File", callback_data="vbulk_file")],
+        [InlineKeyboardButton("◀️ Back", callback_data="vbulk_back")],
+    ]
+)
+
+BULK_RESULT_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("✅ Save All", callback_data="vbulk_save")],
+        [InlineKeyboardButton("📝 Review First", callback_data="vbulk_review")],
+        [InlineKeyboardButton("❌ Discard", callback_data="vbulk_discard")],
+    ]
 )
 
 COMING_SOON = "🚧 Coming soon — this feature will be available in the next update."
@@ -168,6 +195,31 @@ def format_entry(word: str, entry: dict, label: str = "New entry") -> str:
     if entry.get("cefr_level"):
         lines.append(f'📊 <b>Level:</b> {html.escape(entry["cefr_level"])}')
     return "\n".join(lines)
+
+
+def _source_label(entry: dict) -> str:
+    source = entry.get("_source", "")
+    if source == "file_complete":
+        return "📄 From file"
+    elif source == "ai_generated":
+        return "🤖 AI-generated"
+    elif source == "ai_completed":
+        return "🤖 AI-completed (partial)"
+    return ""
+
+
+def _review_keyboard(remaining: int) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton("✅ Keep", callback_data="vbulk_keep"),
+            InlineKeyboardButton("❌ Skip", callback_data="vbulk_skip"),
+        ],
+    ]
+    if remaining > 1:
+        rows.append(
+            [InlineKeyboardButton("✅ Save Remaining", callback_data="vbulk_save_rest")]
+        )
+    return InlineKeyboardMarkup(rows)
 
 
 # ── Vocab menu (standalone handlers) ─────────────────────────────────────────
@@ -442,11 +494,82 @@ async def bulk_add_start(
     _clear_pending(context)
 
     await query.edit_message_text(
+        "📋 <b>Bulk Add</b> — choose your method:",
+        reply_markup=BULK_METHOD_KEYBOARD,
+        parse_mode="HTML",
+    )
+    return BULK_METHOD
+
+
+async def bulk_word_list_start(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
         "Send me a list of words, one per line:\n\n"
         "<code>exacerbate\nmeticulous\nunprecedented\ndetrimental</code>",
         parse_mode="HTML",
     )
     return BULK_WAITING
+
+
+async def bulk_file_start(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
+        "📎 Send me an <b>.xlsx</b> or <b>.csv</b> file with your vocabulary.\n\n"
+        "Expected columns (header names are flexible):\n"
+        "• <b>Word/Phrase</b> (required — this is the lookup key)\n"
+        "• Definition\n"
+        "• Synonyms\n"
+        "• Collocations\n"
+        "• Example\n\n"
+        "Rules:\n"
+        "• Only the Word/Phrase column is required\n"
+        "• Any other column can be filled, partially filled, or completely empty\n"
+        "• I'll use AI to generate only the missing data\n"
+        "• Duplicates already in your vocabulary will be skipped",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("◀️ Back", callback_data="vbulk_back_method")]]
+        ),
+    )
+    return FILE_WAITING
+
+
+async def bulk_back(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    _clear_pending(context)
+    await query.edit_message_text(
+        "📚 <b>Vocabulary</b>\nChoose an option:",
+        reply_markup=VOCAB_MENU_KEYBOARD,
+        parse_mode="HTML",
+    )
+    return ConversationHandler.END
+
+
+async def bulk_back_to_method(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "📋 <b>Bulk Add</b> — choose your method:",
+        reply_markup=BULK_METHOD_KEYBOARD,
+        parse_mode="HTML",
+    )
+    return BULK_METHOD
+
+
+# ── Bulk Add: Word List ──────────────────────────────────────────────────────
 
 
 async def receive_list(
@@ -530,21 +653,259 @@ async def receive_list(
     if failed_words:
         summary += f" {len(failed_words)} failed: {', '.join(failed_words)}."
 
-    await progress_msg.edit_text(
-        summary,
+    await progress_msg.edit_text(summary, reply_markup=BULK_RESULT_KEYBOARD)
+    return BULK_CONFIRM
+
+
+# ── Bulk Add: File Upload ────────────────────────────────────────────────────
+
+
+async def file_waiting_text(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    await update.message.reply_text(
+        '📎 Please send an .xlsx or .csv file, not text.\n\n'
+        'If you\'d like to type words instead, go back and choose "📝 Word List".',
         reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("✅ Save All", callback_data="vbulk_save")],
-                [
-                    InlineKeyboardButton(
-                        "📝 Review First", callback_data="vbulk_review"
-                    )
-                ],
-                [InlineKeyboardButton("❌ Discard", callback_data="vbulk_discard")],
-            ]
+            [[InlineKeyboardButton("◀️ Back", callback_data="vbulk_back_method")]]
         ),
     )
+    return FILE_WAITING
+
+
+async def receive_file(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    user_db_id = await _ensure_user(update)
+    doc = update.message.document
+    back_kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("◀️ Back", callback_data="vbulk_back_method")]]
+    )
+
+    filename = doc.file_name or ""
+    ext = Path(filename).suffix.lower()
+    if ext not in (".xlsx", ".csv"):
+        await update.message.reply_text(
+            "❌ Unsupported file format. Please send an .xlsx or .csv file.",
+            reply_markup=back_kb,
+        )
+        return FILE_WAITING
+
+    temp_path = get_temp_path(filename)
+    try:
+        tg_file = await context.bot.get_file(doc.file_id)
+        await tg_file.download_to_drive(temp_path)
+    except Exception as e:
+        logger.error("Failed to download file: %s", e)
+        await update.message.reply_text(
+            "⚠️ Failed to download the file. Please try again.",
+            reply_markup=back_kb,
+        )
+        return FILE_WAITING
+
+    try:
+        return await _process_uploaded_file(update, context, user_db_id, temp_path)
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+
+async def _process_uploaded_file(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_db_id: int,
+    temp_path: str,
+) -> int:
+    back_kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("◀️ Back", callback_data="vbulk_back_method")]]
+    )
+
+    result = parse_file(temp_path)
+    if "error" in result:
+        await update.message.reply_text(result["error"], reply_markup=back_kb)
+        return FILE_WAITING
+
+    entries = result["entries"]
+
+    if result.get("multiple_sheets"):
+        await update.message.reply_text(
+            "ℹ️ Your file has multiple sheets. Using the first sheet only."
+        )
+
+    if len(entries) > 500:
+        await update.message.reply_text(
+            f"⚠️ File has {len(entries)} rows. Maximum is 500 per upload. "
+            "Please split your file.",
+            reply_markup=back_kb,
+        )
+        return FILE_WAITING
+
+    total_in_file = len(entries)
+
+    # Dedup within file
+    seen: set[str] = set()
+    unique_entries: list[dict] = []
+    file_dups = 0
+    for entry in entries:
+        key = entry["word_phrase"].lower().strip()
+        if key in seen:
+            file_dups += 1
+        else:
+            seen.add(key)
+            unique_entries.append(entry)
+
+    # Dedup against DB
+    words_to_check = [e["word_phrase"] for e in unique_entries]
+    existing = await check_duplicates_bulk(user_db_id, words_to_check)
+    new_entries = [
+        e for e in unique_entries if e["word_phrase"].lower().strip() not in existing
+    ]
+    db_dups = len(unique_entries) - len(new_entries)
+
+    if not new_entries:
+        await update.message.reply_text(
+            "All words already exist in your vocabulary. No new words to add.",
+            reply_markup=BACK_TO_VOCAB,
+        )
+        _clear_pending(context)
+        return ConversationHandler.END
+
+    # Categorize entries
+    complete_entries: list[dict] = []
+    partial_entries: list[dict] = []
+    empty_entries: list[dict] = []
+
+    for entry in new_entries:
+        filled = [f for f in ALL_VOCAB_FIELDS if entry.get(f)]
+        if len(filled) == len(ALL_VOCAB_FIELDS):
+            entry["_source"] = "file_complete"
+            complete_entries.append(entry)
+        elif filled:
+            entry["_source"] = "ai_completed"
+            partial_entries.append(entry)
+        else:
+            entry["_source"] = "ai_generated"
+            empty_entries.append(entry)
+
+    needs_ai = len(partial_entries) + len(empty_entries)
+
+    summary_lines = [
+        "📊 <b>Processing summary:</b>",
+        f"• Total rows in file: {total_in_file}",
+    ]
+    if file_dups:
+        summary_lines.append(f"• Duplicates within file: {file_dups} (skipped)")
+    if db_dups:
+        summary_lines.append(f"• Already in your vocabulary: {db_dups} (skipped)")
+    summary_lines.append(f"• New words to process: {len(new_entries)}")
+
+    if needs_ai:
+        summary_lines.append(
+            f"\n⏳ Generating missing data for {needs_ai} words "
+            "with incomplete entries..."
+        )
+    else:
+        summary_lines.append("\n✅ All entries are complete!")
+
+    progress_msg = await update.message.reply_text(
+        "\n".join(summary_lines), parse_mode="HTML"
+    )
+
+    # Process entries needing AI
+    all_processed: list[dict] = list(complete_entries)
+    failed_words: list[str] = []
+    processed_count = 0
+    total_ai = needs_ai
+
+    # Empty entries → batch of 5
+    for i in range(0, len(empty_entries), 5):
+        batch = empty_entries[i : i + 5]
+        batch_words = [e["word_phrase"] for e in batch]
+        generated = False
+        for attempt in range(2):
+            try:
+                results = await generate_vocab_entries_bulk(batch_words)
+                for r in results:
+                    r["_source"] = "ai_generated"
+                all_processed.extend(results)
+                generated = True
+                break
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning("Bulk AI failed for %s, retrying: %s", batch_words, e)
+                else:
+                    logger.error(
+                        "Bulk AI failed for %s after retry: %s", batch_words, e
+                    )
+        if not generated:
+            failed_words.extend(batch_words)
+
+        processed_count += len(batch)
+        if total_ai > 0:
+            try:
+                await progress_msg.edit_text(
+                    f"⏳ Generating... {processed_count}/{total_ai}"
+                )
+            except Exception:
+                pass
+
+    # Partial entries → batch of 3
+    for i in range(0, len(partial_entries), 3):
+        batch = partial_entries[i : i + 3]
+        generated = False
+        for attempt in range(2):
+            try:
+                results = await generate_vocab_entries_partial(batch)
+                for r in results:
+                    r["_source"] = "ai_completed"
+                all_processed.extend(results)
+                generated = True
+                break
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning("Partial AI failed, retrying: %s", e)
+                else:
+                    logger.error("Partial AI failed after retry: %s", e)
+        if not generated:
+            failed_words.extend([e["word_phrase"] for e in batch])
+
+        processed_count += len(batch)
+        if total_ai > 0:
+            try:
+                await progress_msg.edit_text(
+                    f"⏳ Generating... {processed_count}/{total_ai}"
+                )
+            except Exception:
+                pass
+
+    if not all_processed:
+        await progress_msg.edit_text(
+            "⚠️ Failed to process all words. Please try again later.",
+            reply_markup=BACK_TO_VOCAB,
+        )
+        _clear_pending(context)
+        return ConversationHandler.END
+
+    context.user_data["bulk_entries"] = all_processed
+
+    n_complete = len(complete_entries)
+    n_ai_gen = sum(1 for e in all_processed if e.get("_source") == "ai_generated")
+    n_ai_part = sum(1 for e in all_processed if e.get("_source") == "ai_completed")
+
+    final = f"✅ All {len(all_processed)} entries ready!\n\n"
+    final += f"• Complete from file (no AI needed): {n_complete}\n"
+    final += f"• AI-generated (all fields): {n_ai_gen}\n"
+    final += f"• AI-completed (partial fill): {n_ai_part}"
+    if failed_words:
+        final += f"\n• ⚠️ Failed: {len(failed_words)} ({', '.join(failed_words)})"
+
+    await progress_msg.edit_text(final, reply_markup=BULK_RESULT_KEYBOARD)
     return BULK_CONFIRM
+
+
+# ── Bulk: Save / Review / Discard (shared by both word list & file upload) ───
 
 
 async def bulk_save_all(
@@ -591,18 +952,14 @@ async def bulk_review_start(
 
     entry = entries[0]
     word = entry.get("word_phrase", "")
-    text = f"📝 Word 1/{len(entries)}:\n\n{format_entry(word, entry)}"
+    source = _source_label(entry)
+    text = format_entry(word, entry, label=f"Entry 1/{len(entries)}")
+    if source:
+        text += f"\n{source}"
 
     await query.edit_message_text(
         text,
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("✅ Keep", callback_data="vbulk_keep"),
-                    InlineKeyboardButton("❌ Skip", callback_data="vbulk_skip"),
-                ]
-            ]
-        ),
+        reply_markup=_review_keyboard(len(entries)),
         parse_mode="HTML",
     )
     return BULK_REVIEWING
@@ -626,18 +983,15 @@ async def _handle_review_next(
     if index < len(entries):
         entry = entries[index]
         word = entry.get("word_phrase", "")
-        text = f"📝 Word {index + 1}/{len(entries)}:\n\n{format_entry(word, entry)}"
+        remaining = len(entries) - index
+        source = _source_label(entry)
+        text = format_entry(word, entry, label=f"Entry {index + 1}/{len(entries)}")
+        if source:
+            text += f"\n{source}"
 
         await query.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("✅ Keep", callback_data="vbulk_keep"),
-                        InlineKeyboardButton("❌ Skip", callback_data="vbulk_skip"),
-                    ]
-                ]
-            ),
+            reply_markup=_review_keyboard(remaining),
             parse_mode="HTML",
         )
         return BULK_REVIEWING
@@ -673,6 +1027,36 @@ async def review_skip(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     return await _handle_review_next(update, context, keep=False)
+
+
+async def review_save_remaining(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    user_db_id = await _ensure_user(update)
+
+    entries = context.user_data["bulk_entries"]
+    index = context.user_data["review_index"]
+    kept = context.user_data["bulk_kept"]
+
+    all_to_save = kept + entries[index:]
+
+    if all_to_save:
+        word_ids = await insert_words_bulk(user_db_id, all_to_save)
+        for wid in word_ids:
+            await create_vocab_progress(user_db_id, wid)
+        await query.edit_message_text(
+            f"✅ Saved {len(word_ids)} words to your vocabulary.",
+            reply_markup=BACK_TO_VOCAB,
+        )
+    else:
+        await query.edit_message_text(
+            "No words to save.", reply_markup=BACK_TO_VOCAB
+        )
+
+    _clear_pending(context)
+    return ConversationHandler.END
 
 
 async def bulk_discard(
@@ -724,17 +1108,38 @@ def build_vocab_conversation_handler() -> ConversationHandler:
             ADD_EDITING: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_edit),
             ],
+            BULK_METHOD: [
+                CallbackQueryHandler(
+                    bulk_word_list_start, pattern="^vbulk_wordlist$"
+                ),
+                CallbackQueryHandler(bulk_file_start, pattern="^vbulk_file$"),
+                CallbackQueryHandler(bulk_back, pattern="^vbulk_back$"),
+            ],
             BULK_WAITING: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_list),
             ],
+            FILE_WAITING: [
+                MessageHandler(filters.Document.ALL, receive_file),
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, file_waiting_text
+                ),
+                CallbackQueryHandler(
+                    bulk_back_to_method, pattern="^vbulk_back_method$"
+                ),
+            ],
             BULK_CONFIRM: [
                 CallbackQueryHandler(bulk_save_all, pattern="^vbulk_save$"),
-                CallbackQueryHandler(bulk_review_start, pattern="^vbulk_review$"),
+                CallbackQueryHandler(
+                    bulk_review_start, pattern="^vbulk_review$"
+                ),
                 CallbackQueryHandler(bulk_discard, pattern="^vbulk_discard$"),
             ],
             BULK_REVIEWING: [
                 CallbackQueryHandler(review_keep, pattern="^vbulk_keep$"),
                 CallbackQueryHandler(review_skip, pattern="^vbulk_skip$"),
+                CallbackQueryHandler(
+                    review_save_remaining, pattern="^vbulk_save_rest$"
+                ),
             ],
         },
         fallbacks=[

@@ -66,7 +66,7 @@ async def check_duplicates_bulk(user_id: int, words: list[str]) -> set[str]:
 async def insert_words_bulk(user_id: int, entries: list[dict]) -> list[int]:
     pool = get_pool()
     word_ids = []
-    async with pool.acquire() as conn:
+    async with pool.acquire() as conn, conn.transaction():
         for entry in entries:
             word_id = await conn.fetchval(
                 """INSERT INTO vocabulary
