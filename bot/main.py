@@ -5,7 +5,16 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 from bot.config import TELEGRAM_BOT_TOKEN
 from bot.database import close_pool, create_pool, init_db
-from bot.handlers.grammar import grammar_menu_callback, grammar_stub_callback
+from bot.handlers.grammar import (
+    build_grammar_quiz_conversation_handler,
+    grammar_menu_callback,
+    grammar_stub_callback,
+    learn_nav_callback,
+    learn_topic_selected,
+    learn_topics_callback,
+    quiz_by_topic_callback,
+    quiz_menu_callback,
+)
 from bot.handlers.start import help_command, main_menu_callback, start_command
 from bot.handlers.flashcards import build_flashcard_conversation_handler
 from bot.handlers.vocab import (
@@ -65,8 +74,16 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(vocab_menu_callback, pattern="^menu_vocab$"))
     app.add_handler(CallbackQueryHandler(grammar_menu_callback, pattern="^menu_grammar$"))
 
+    app.add_handler(CallbackQueryHandler(learn_topics_callback, pattern="^grammar_learn$"))
+    app.add_handler(CallbackQueryHandler(learn_topic_selected, pattern=r"^glearn_topic_\d+$"))
+    app.add_handler(CallbackQueryHandler(learn_nav_callback, pattern=r"^glearn_(prev|next)$"))
+
+    app.add_handler(CallbackQueryHandler(quiz_menu_callback, pattern="^grammar_quiz$"))
+    app.add_handler(CallbackQueryHandler(quiz_by_topic_callback, pattern="^gquiz_by_topic$"))
+
     app.add_handler(build_vocab_conversation_handler())
     app.add_handler(build_flashcard_conversation_handler())
+    app.add_handler(build_grammar_quiz_conversation_handler())
 
     app.add_handler(CallbackQueryHandler(vocab_stub_callback, pattern="^vocab_"))
     app.add_handler(CallbackQueryHandler(grammar_stub_callback, pattern="^grammar_"))

@@ -288,6 +288,7 @@ async def flashcards_start(
         "card_type": None,
         "correct_answer": None,
         "correct_option_index": None,
+        "_answered_indices": [],
     }
 
     return await _show_card(update, ctx, edit_message=query.message)
@@ -327,6 +328,7 @@ async def quiz_start(
         "card_type": None,
         "correct_answer": None,
         "correct_option_index": None,
+        "_answered_indices": [],
     }
 
     return await _show_card(update, ctx, edit_message=query.message)
@@ -365,21 +367,25 @@ async def _handle_answer(
             await update.message.reply_text(text, reply_markup=BACK_TO_VOCAB)
         return ConversationHandler.END
 
-    if ses["mode"] == "flashcard":
-        card = ses["cards"][ses["current"]]
-        quality = 4 if is_correct else 1
-        ef, interval, reps = sm2_update(
-            card["ease_factor"], card["interval_days"], card["repetitions"], quality,
-        )
-        await update_vocab_progress(card["progress_id"], ef, interval, reps)
+    current_idx = ses["current"]
 
-    ses["answered"] += 1
-    if is_correct:
-        ses["correct"] += 1
+    if current_idx not in ses["_answered_indices"]:
+        if ses["mode"] == "flashcard":
+            card = ses["cards"][current_idx]
+            quality = 4 if is_correct else 1
+            ef, interval, reps = sm2_update(
+                card["ease_factor"], card["interval_days"], card["repetitions"], quality,
+            )
+            await update_vocab_progress(card["progress_id"], ef, interval, reps)
+
+        ses["answered"] += 1
+        if is_correct:
+            ses["correct"] += 1
+        ses["_answered_indices"].append(current_idx)
 
     answered = ses["answered"]
     total = ses["total"]
-    accuracy = round(ses["correct"] / answered * 100)
+    accuracy = round(ses["correct"] / answered * 100) if answered else 0
 
     if is_correct:
         result = "✅ Correct!"
