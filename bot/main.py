@@ -6,6 +6,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 from bot.config import TELEGRAM_BOT_TOKEN
 from bot.database import close_pool, create_pool, init_db
 from bot.handlers.grammar import (
+    build_grammar_add_topic_conversation_handler,
     build_grammar_quiz_conversation_handler,
     grammar_menu_callback,
     grammar_stub_callback,
@@ -84,6 +85,7 @@ def main() -> None:
     app.add_handler(build_vocab_conversation_handler())
     app.add_handler(build_flashcard_conversation_handler())
     app.add_handler(build_grammar_quiz_conversation_handler())
+    app.add_handler(build_grammar_add_topic_conversation_handler())
 
     app.add_handler(CallbackQueryHandler(vocab_stub_callback, pattern="^vocab_"))
     app.add_handler(CallbackQueryHandler(grammar_stub_callback, pattern="^grammar_"))

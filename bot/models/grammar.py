@@ -199,3 +199,119 @@ async def get_unpracticed_topic_ids(user_db_id: int) -> list[int]:
         user_db_id,
     )
     return [r["id"] for r in rows]
+
+
+# ── Topic generation helpers ──────────────────────────────────────────────
+
+
+async def find_duplicate_topic(user_db_id: int, topic_name: str) -> dict | None:
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """SELECT id, name, user_id FROM grammar_topics
+           WHERE (user_id = $1 OR user_id IS NULL)
+             AND lower(name) = lower($2)""",
+        user_db_id,
+        topic_name,
+    )
+    return dict(row) if row else None
+
+
+async def save_grammar_module(
+    user_db_id: int,
+    topic_data: dict,
+    rules: list[dict],
+    questions: list[dict],
+    *,
+    topic_id: int | None = None,
+    rule_indices: set[int] | None = None,
+) -> int:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if topic_id is None:
+                topic_id = await conn.fetchval(
+                    """INSERT INTO grammar_topics
+                       (user_id, name, description, skill_tag, band_target)
+                       VALUES ($1, $2, $3, $4, $5) RETURNING id""",
+                    user_db_id,
+                    topic_data["name"],
+                    topic_data["description"],
+                    topic_data.get("skill_tag", "both"),
+                    topic_data.get("band_target", "7"),
+                )
+                await conn.execute(
+                    "INSERT INTO grammar_progress (user_id, topic_id) VALUES ($1, $2)",
+                    user_db_id,
+                    topic_id,
+                )
+
+            rule_title_to_id = {}
+            for i, rule in enumerate(rules):
+                if rule_indices is not None and i not in rule_indices:
+                    continue
+                rid = await conn.fetchval(
+                    """INSERT INTO grammar_rules
+                       (user_id, topic_id, rule_title, rule_text,
+                        correct_example, incorrect_example, tip, sort_order)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
+                    user_db_id,
+                    topic_id,
+                    rule["rule_title"],
+                    rule["rule_text"],
+                    rule["correct_example"],
+                    rule["incorrect_example"],
+                    rule.get("tip", ""),
+                    rule.get("sort_order", i + 1),
+                )
+                rule_title_to_id[rule["rule_title"]] = rid
+
+            for q in questions:
+                rid = rule_title_to_id.get(q.get("linked_rule_title"))
+                if rid is None:
+                    continue
+                wrong = json.dumps(q.get("wrong_answers") or [])
+                await conn.execute(
+                    """INSERT INTO grammar_questions
+                       (user_id, rule_id, question_type, prompt,
+                        correct_answer, wrong_answers, explanation)
+                       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)""",
+                    user_db_id,
+                    rid,
+                    q["question_type"],
+                    q["prompt"],
+                    q["correct_answer"],
+                    wrong,
+                    q.get("explanation", ""),
+                )
+
+            return topic_id
+
+
+async def delete_topic_cascade(topic_id: int, user_db_id: int) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """DELETE FROM grammar_questions
+                   WHERE rule_id IN (
+                       SELECT id FROM grammar_rules
+                       WHERE topic_id = $1 AND user_id = $2
+                   ) AND user_id = $2""",
+                topic_id,
+                user_db_id,
+            )
+            await conn.execute(
+                "DELETE FROM grammar_rules WHERE topic_id = $1 AND user_id = $2",
+                topic_id,
+                user_db_id,
+            )
+            await conn.execute(
+                "DELETE FROM grammar_progress WHERE topic_id = $1 AND user_id = $2",
+                topic_id,
+                user_db_id,
+            )
+            await conn.execute(
+                "DELETE FROM grammar_topics WHERE id = $1 AND user_id = $2",
+                topic_id,
+                user_db_id,
+            )

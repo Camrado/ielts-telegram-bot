@@ -15,6 +15,8 @@ from telegram.ext import (
 )
 
 from bot.models.grammar import (
+    delete_topic_cascade,
+    find_duplicate_topic,
     get_all_questions,
     get_all_topics,
     get_or_create_progress,
@@ -24,9 +26,11 @@ from bot.models.grammar import (
     get_topic_by_id,
     get_unpracticed_topic_ids,
     get_weak_topic_ids,
+    save_grammar_module,
     update_progress,
 )
 from bot.models.user import get_or_create_user
+from bot.services.ai import generate_grammar_module
 from bot.utils import levenshtein
 
 logger = logging.getLogger(__name__)
@@ -709,6 +713,585 @@ def build_grammar_quiz_conversation_handler() -> ConversationHandler:
         },
         fallbacks=[
             CommandHandler("cancel", gq_cancel),
+        ],
+        allow_reentry=True,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ADD TOPIC MODE (AI generation)
+# ═══════════════════════════════════════════════════════════════════════════
+
+GAT_WAITING_DESC = 40
+GAT_PREVIEW = 41
+GAT_PREVIEW_MORE = 42
+GAT_DUPLICATE = 43
+GAT_WAITING_RENAME = 44
+
+
+def _gat_pending(ctx: ContextTypes.DEFAULT_TYPE) -> dict | None:
+    return ctx.user_data.get("gat_pending")
+
+
+def _gat_clear(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    ctx.user_data.pop("gat_pending", None)
+
+
+# ── Display helpers ────────────────────────────────────────────────────────
+
+
+def _gat_build_rule_page(pending: dict) -> tuple[str, InlineKeyboardMarkup]:
+    idx = pending["current_rule_idx"]
+    rules = pending["rules"]
+    rule = rules[idx]
+    total = len(rules)
+    saved = pending["saved_rule_indices"]
+    is_saved = idx in saved
+
+    title_suffix = " ✅" if is_saved else ""
+    text = (
+        f"📖 Rule {idx + 1}/{total}: "
+        f"<b>{html.escape(rule.get('rule_title', 'Untitled'))}{title_suffix}</b>\n\n"
+        f"📝 {html.escape(rule.get('rule_text', ''))}\n\n"
+        f"✅ {html.escape(rule.get('correct_example', ''))}\n"
+        f"❌ {html.escape(rule.get('incorrect_example', ''))}\n\n"
+        f"💡 {html.escape(rule.get('tip', ''))}"
+    )
+
+    nav_row = []
+    if idx > 0:
+        nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data="gat_prev"))
+    if idx < total - 1:
+        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data="gat_next"))
+
+    action_row = []
+    if is_saved:
+        action_row.append(InlineKeyboardButton("✅ Saved", callback_data="gat_noop"))
+    else:
+        action_row.append(InlineKeyboardButton("✅ Save", callback_data="gat_save_single"))
+
+    unsaved_count = sum(1 for i in range(total) if i not in saved)
+    if unsaved_count > 0:
+        action_row.append(
+            InlineKeyboardButton(
+                f"✅ Save All ({unsaved_count})", callback_data="gat_save_all"
+            )
+        )
+
+    buttons = []
+    if nav_row:
+        buttons.append(nav_row)
+    buttons.append(action_row)
+    buttons.append([InlineKeyboardButton("❌ Discard", callback_data="gat_discard")])
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def _gat_show_initial_preview(message, pending: dict) -> None:
+    topic = pending["topic"]
+    rules = pending["rules"]
+    questions = pending["questions"]
+    rule = rules[0]
+
+    text = (
+        f"📝 Generated: \"<b>{html.escape(topic.get('name', ''))}</b>\"\n"
+        f"📖 {html.escape(topic.get('description', ''))}\n\n"
+        f"{len(rules)} rules, {len(questions)} questions\n\n"
+        f"Preview of first rule:\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>{html.escape(rule.get('rule_title', ''))}</b>\n\n"
+        f"{html.escape(rule.get('rule_text', ''))}\n\n"
+        f"✅ {html.escape(rule.get('correct_example', ''))}\n"
+        f"❌ {html.escape(rule.get('incorrect_example', ''))}\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Save All", callback_data="gat_save_all"),
+            InlineKeyboardButton("📝 Preview More", callback_data="gat_preview_more"),
+        ],
+        [InlineKeyboardButton("❌ Discard", callback_data="gat_discard")],
+    ])
+
+    await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def _gat_respond(text, reply_markup, *, edit_msg=None, reply_msg=None):
+    if edit_msg:
+        await edit_msg.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+    else:
+        await reply_msg.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
+
+
+# ── Save logic ─────────────────────────────────────────────────────────────
+
+
+async def _gat_execute_save(
+    context: ContextTypes.DEFAULT_TYPE,
+    save_mode: str,
+    *,
+    edit_msg=None,
+    reply_msg=None,
+) -> int:
+    pending = _gat_pending(context)
+    user_db_id = pending["user_db_id"]
+    topic = pending["topic"]
+    rules = pending["rules"]
+    questions = pending["questions"]
+    saved = set(pending["saved_rule_indices"])
+
+    try:
+        if save_mode == "all":
+            unsaved = set(range(len(rules))) - saved
+            if not unsaved:
+                await _gat_respond(
+                    "✅ All rules already saved!",
+                    BACK_TO_GRAMMAR,
+                    edit_msg=edit_msg,
+                    reply_msg=reply_msg,
+                )
+                _gat_clear(context)
+                return ConversationHandler.END
+
+            indices = unsaved if saved else None
+            topic_id = await save_grammar_module(
+                user_db_id,
+                topic,
+                rules,
+                questions,
+                topic_id=pending["topic_db_id"],
+                rule_indices=indices,
+            )
+            _gat_clear(context)
+            await _gat_respond(
+                f"✅ Saved! '<b>{html.escape(topic['name'])}</b>' is now available "
+                f"in your Learn and Quiz sections.",
+                BACK_TO_GRAMMAR,
+                edit_msg=edit_msg,
+                reply_msg=reply_msg,
+            )
+            return ConversationHandler.END
+
+        idx = pending["current_rule_idx"]
+        if idx in saved:
+            return GAT_PREVIEW_MORE
+
+        topic_id = await save_grammar_module(
+            user_db_id,
+            topic,
+            rules,
+            questions,
+            topic_id=pending["topic_db_id"],
+            rule_indices={idx},
+        )
+        pending["topic_db_id"] = topic_id
+        pending["saved_rule_indices"].append(idx)
+
+        text, kb = _gat_build_rule_page(pending)
+        await _gat_respond(text, kb, edit_msg=edit_msg, reply_msg=reply_msg)
+        return GAT_PREVIEW_MORE
+
+    except Exception as e:
+        logger.error("Failed to save grammar module: %s", e)
+        await _gat_respond(
+            "❌ Failed to save. Please try again.",
+            BACK_TO_GRAMMAR,
+            edit_msg=edit_msg,
+            reply_msg=reply_msg,
+        )
+        _gat_clear(context)
+        return ConversationHandler.END
+
+
+async def _gat_show_duplicate_warning(
+    pending: dict, dup: dict, *, edit_msg=None, reply_msg=None
+) -> None:
+    is_global = dup.get("user_id") is None
+    pending["duplicate_id"] = dup["id"]
+    pending["duplicate_is_global"] = is_global
+
+    if is_global:
+        text = (
+            f"⚠️ A built-in topic named '<b>{html.escape(dup['name'])}</b>' "
+            f"already exists.\n\nYou can save with a different name or cancel."
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 Save as New (rename)", callback_data="gat_dup_rename")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="gat_dup_cancel")],
+        ])
+    else:
+        text = (
+            f"⚠️ A topic named '<b>{html.escape(dup['name'])}</b>' already exists."
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Replace Existing", callback_data="gat_dup_replace")],
+            [InlineKeyboardButton("📝 Save as New (rename)", callback_data="gat_dup_rename")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="gat_dup_cancel")],
+        ])
+
+    await _gat_respond(text, kb, edit_msg=edit_msg, reply_msg=reply_msg)
+
+
+async def _gat_check_and_save(
+    context: ContextTypes.DEFAULT_TYPE,
+    save_mode: str,
+    *,
+    edit_msg=None,
+    reply_msg=None,
+) -> int:
+    pending = _gat_pending(context)
+    pending["save_mode"] = save_mode
+
+    if pending["topic_db_id"] is None:
+        dup = await find_duplicate_topic(
+            pending["user_db_id"], pending["topic"]["name"]
+        )
+        if dup:
+            await _gat_show_duplicate_warning(
+                pending, dup, edit_msg=edit_msg, reply_msg=reply_msg
+            )
+            return GAT_DUPLICATE
+
+    return await _gat_execute_save(
+        context, save_mode, edit_msg=edit_msg, reply_msg=reply_msg
+    )
+
+
+# ── Entry point ────────────────────────────────────────────────────────────
+
+
+async def gat_start(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    user_db_id = await _ensure_user(update)
+    context.user_data["gat_pending"] = {"user_db_id": user_db_id}
+    await query.edit_message_text(
+        "Describe the grammar topic you want to study. "
+        "You can be brief or detailed:\n\n"
+        "• Brief: <i>punctuation</i>\n"
+        "• Specific: <i>comma splices and run-on sentences</i>\n"
+        "• Detailed: <i>I keep making mistakes with articles before "
+        "abstract nouns like education, society, technology in Task 2. "
+        "I write 'the education' when it should be 'education'.</i>\n\n"
+        "The more detail you give, the more targeted the content.\n\n"
+        "Send /cancel to go back.",
+        parse_mode="HTML",
+    )
+    return GAT_WAITING_DESC
+
+
+# ── Description received ──────────────────────────────────────────────────
+
+
+async def gat_receive_description(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    pending = _gat_pending(context)
+    if not pending:
+        await update.message.reply_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+
+    description = update.message.text.strip()
+    msg = await update.message.reply_text("⏳ Generating grammar module...")
+
+    try:
+        data = await generate_grammar_module(description)
+    except Exception as e:
+        logger.error("Grammar module generation failed: %s", e)
+        await msg.edit_text(
+            "❌ Failed to generate grammar module. "
+            "Please try again with a different description, "
+            "or send /cancel to go back."
+        )
+        return GAT_WAITING_DESC
+
+    topic = data.get("topic", {})
+    rules = data.get("rules", [])
+    questions = data.get("questions", [])
+
+    if not rules:
+        await msg.edit_text(
+            "❌ No rules were generated. "
+            "Please try a different description, or send /cancel to go back."
+        )
+        return GAT_WAITING_DESC
+
+    pending.update({
+        "topic": topic,
+        "rules": rules,
+        "questions": questions,
+        "current_rule_idx": 0,
+        "saved_rule_indices": [],
+        "topic_db_id": None,
+        "save_mode": None,
+    })
+
+    await _gat_show_initial_preview(msg, pending)
+    return GAT_PREVIEW
+
+
+# ── Preview actions ────────────────────────────────────────────────────────
+
+
+async def gat_save_all(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    pending = _gat_pending(context)
+    if not pending or "rules" not in pending:
+        await query.edit_message_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+    return await _gat_check_and_save(context, "all", edit_msg=query.message)
+
+
+async def gat_preview_more(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    pending = _gat_pending(context)
+    if not pending or "rules" not in pending:
+        await query.edit_message_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+
+    pending["current_rule_idx"] = 1 if len(pending["rules"]) > 1 else 0
+    text, kb = _gat_build_rule_page(pending)
+    await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    return GAT_PREVIEW_MORE
+
+
+async def gat_discard(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    pending = _gat_pending(context)
+    saved_count = len(pending.get("saved_rule_indices", [])) if pending else 0
+    _gat_clear(context)
+
+    if saved_count > 0:
+        text = (
+            f"Remaining rules discarded. "
+            f"{saved_count} previously saved rule(s) remain."
+        )
+    else:
+        text = "❌ Discarded."
+
+    await query.edit_message_text(text, reply_markup=BACK_TO_GRAMMAR)
+    return ConversationHandler.END
+
+
+# ── Preview More navigation ───────────────────────────────────────────────
+
+
+async def gat_nav(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    pending = _gat_pending(context)
+    if not pending or "rules" not in pending:
+        await query.edit_message_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+
+    if query.data == "gat_next":
+        pending["current_rule_idx"] = min(
+            pending["current_rule_idx"] + 1, len(pending["rules"]) - 1
+        )
+    elif query.data == "gat_prev":
+        pending["current_rule_idx"] = max(pending["current_rule_idx"] - 1, 0)
+
+    text, kb = _gat_build_rule_page(pending)
+    await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    return GAT_PREVIEW_MORE
+
+
+async def gat_save_single(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    pending = _gat_pending(context)
+    if not pending or "rules" not in pending:
+        await query.edit_message_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+    return await _gat_check_and_save(context, "single", edit_msg=query.message)
+
+
+async def gat_noop(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer("Already saved!")
+    return GAT_PREVIEW_MORE
+
+
+# ── Duplicate handling ─────────────────────────────────────────────────────
+
+
+async def gat_dup_replace(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    pending = _gat_pending(context)
+    if not pending:
+        await query.edit_message_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+
+    try:
+        await delete_topic_cascade(pending["duplicate_id"], pending["user_db_id"])
+    except Exception as e:
+        logger.error("Failed to delete existing topic: %s", e)
+        await query.edit_message_text(
+            "❌ Failed to replace. Please try again.",
+            reply_markup=BACK_TO_GRAMMAR,
+        )
+        _gat_clear(context)
+        return ConversationHandler.END
+
+    pending.pop("duplicate_id", None)
+    return await _gat_execute_save(
+        context, pending["save_mode"], edit_msg=query.message
+    )
+
+
+async def gat_dup_rename(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    pending = _gat_pending(context)
+    if not pending:
+        await query.edit_message_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+
+    await query.edit_message_text(
+        "Type a new name for this topic:\n\nSend /cancel to go back.",
+        parse_mode="HTML",
+    )
+    return GAT_WAITING_RENAME
+
+
+async def gat_dup_cancel(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    pending = _gat_pending(context)
+    if not pending or "rules" not in pending:
+        await query.edit_message_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+
+    await _gat_show_initial_preview(query.message, pending)
+    return GAT_PREVIEW
+
+
+async def gat_receive_rename(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    pending = _gat_pending(context)
+    if not pending:
+        await update.message.reply_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+
+    new_name = update.message.text.strip()
+    pending["topic"]["name"] = new_name
+
+    dup = await find_duplicate_topic(pending["user_db_id"], new_name)
+    if dup:
+        await _gat_show_duplicate_warning(
+            pending, dup, reply_msg=update.message
+        )
+        return GAT_DUPLICATE
+
+    return await _gat_execute_save(
+        context, pending["save_mode"], reply_msg=update.message
+    )
+
+
+# ── Cancel ─────────────────────────────────────────────────────────────────
+
+
+async def gat_cancel(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    _gat_clear(context)
+    await update.message.reply_text("❌ Cancelled.", reply_markup=BACK_TO_GRAMMAR)
+    return ConversationHandler.END
+
+
+# ── ConversationHandler builder ────────────────────────────────────────────
+
+
+def build_grammar_add_topic_conversation_handler() -> ConversationHandler:
+    return ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(gat_start, pattern="^grammar_add_topic$"),
+        ],
+        states={
+            GAT_WAITING_DESC: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, gat_receive_description
+                ),
+            ],
+            GAT_PREVIEW: [
+                CallbackQueryHandler(gat_save_all, pattern="^gat_save_all$"),
+                CallbackQueryHandler(
+                    gat_preview_more, pattern="^gat_preview_more$"
+                ),
+                CallbackQueryHandler(gat_discard, pattern="^gat_discard$"),
+            ],
+            GAT_PREVIEW_MORE: [
+                CallbackQueryHandler(gat_nav, pattern=r"^gat_(prev|next)$"),
+                CallbackQueryHandler(
+                    gat_save_single, pattern="^gat_save_single$"
+                ),
+                CallbackQueryHandler(gat_save_all, pattern="^gat_save_all$"),
+                CallbackQueryHandler(gat_discard, pattern="^gat_discard$"),
+                CallbackQueryHandler(gat_noop, pattern="^gat_noop$"),
+            ],
+            GAT_DUPLICATE: [
+                CallbackQueryHandler(
+                    gat_dup_replace, pattern="^gat_dup_replace$"
+                ),
+                CallbackQueryHandler(
+                    gat_dup_rename, pattern="^gat_dup_rename$"
+                ),
+                CallbackQueryHandler(
+                    gat_dup_cancel, pattern="^gat_dup_cancel$"
+                ),
+            ],
+            GAT_WAITING_RENAME: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, gat_receive_rename
+                ),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", gat_cancel),
         ],
         allow_reentry=True,
     )
