@@ -81,7 +81,7 @@ async def generate_vocab_entry(word: str, provided: dict[str, str]) -> dict[str,
 
     for attempt in range(2):
         resp = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
@@ -128,7 +128,7 @@ async def generate_vocab_entries_partial(
 
     for attempt in range(2):
         resp = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
@@ -199,7 +199,7 @@ async def generate_grammar_module(description: str) -> dict:
 
     for attempt in range(2):
         resp = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": GRAMMAR_MODULE_SYSTEM_PROMPT},
                 {"role": "user", "content": description},
@@ -236,7 +236,7 @@ async def generate_vocab_entries_bulk(words: list[str]) -> list[dict[str, str]]:
 
     for attempt in range(2):
         resp = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
