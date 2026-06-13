@@ -80,12 +80,15 @@ async def cancel_global(update: Update, context) -> None:
                     "bulk_kept", "review_index", "bulk_skipped_count"):
             context.user_data.pop(key, None)
 
+    from bot.handlers.menu_utils import delete_old_menu, track_menu
     from bot.handlers.start import MAIN_MENU_KEYBOARD
-    await update.message.reply_text(
+    await delete_old_menu(context, update.effective_chat.id)
+    msg = await update.message.reply_text(
         "❌ Cancelled. Choose a section:",
         reply_markup=MAIN_MENU_KEYBOARD,
         parse_mode="HTML",
     )
+    await track_menu(context, msg)
 
 
 def main() -> None:

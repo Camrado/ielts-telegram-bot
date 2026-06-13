@@ -3,6 +3,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.database import get_pool
+from bot.handlers.menu_utils import delete_old_menu, refresh_menu, track_menu
 from bot.models.progress import count_due_now, get_srs_status
 from bot.models.grammar import get_all_progress, get_all_topics
 from bot.models.user import get_or_create_user, get_user_streak
@@ -46,15 +47,18 @@ async def _ensure_user(update: Update) -> int:
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _ensure_user(update)
-    await update.message.reply_text(
+    await delete_old_menu(context, update.effective_chat.id)
+    msg = await update.message.reply_text(
         "Welcome to the <b>IELTS Preparation Bot</b>! 🎓\nChoose a section:",
         reply_markup=MAIN_MENU_KEYBOARD,
         parse_mode="HTML",
     )
+    await track_menu(context, msg)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _ensure_user(update)
+    await delete_old_menu(context, update.effective_chat.id)
     await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
 
 
@@ -62,7 +66,8 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     await _ensure_user(update)
-    await query.edit_message_text(
+    await refresh_menu(
+        query, context,
         "Choose a section:",
         reply_markup=MAIN_MENU_KEYBOARD,
         parse_mode="HTML",
@@ -85,7 +90,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"📖 Grammar: {len(topics)} topics, {mastered} mastered\n"
         f"🔥 Streak: {streak['current_streak']} days"
     )
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=MAIN_MENU_KEYBOARD)
+    await delete_old_menu(context, update.effective_chat.id)
+    msg = await update.message.reply_text(text, parse_mode="HTML", reply_markup=MAIN_MENU_KEYBOARD)
+    await track_menu(context, msg)
 
 
 async def reminders_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -102,11 +109,13 @@ async def reminders_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         ],
         [InlineKeyboardButton("◀️ Back", callback_data="back_main")],
     ])
-    await update.message.reply_text(
+    await delete_old_menu(context, update.effective_chat.id)
+    msg = await update.message.reply_text(
         f"🔔 Reminders are currently <b>{status}</b>.",
         reply_markup=kb,
         parse_mode="HTML",
     )
+    await track_menu(context, msg)
 
 
 async def reminders_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -128,7 +137,8 @@ async def reminders_toggle_callback(update: Update, context: ContextTypes.DEFAUL
         ],
         [InlineKeyboardButton("◀️ Back", callback_data="back_main")],
     ])
-    await query.edit_message_text(
+    await refresh_menu(
+        query, context,
         f"🔔 Reminders are now <b>{status}</b>.",
         reply_markup=kb,
         parse_mode="HTML",

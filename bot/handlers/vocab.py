@@ -29,6 +29,7 @@ from bot.services.ai import (
     generate_vocab_entries_partial,
     generate_vocab_entry,
 )
+from bot.handlers.menu_utils import refresh_menu
 from bot.services.file_parser import get_temp_path, parse_file
 
 logger = logging.getLogger(__name__)
@@ -232,7 +233,8 @@ async def vocab_menu_callback(
     query = update.callback_query
     await query.answer()
     await _ensure_user(update)
-    await query.edit_message_text(
+    await refresh_menu(
+        query, context,
         "📚 <b>Vocabulary</b>\nChoose an option:",
         reply_markup=VOCAB_MENU_KEYBOARD,
         parse_mode="HTML",
@@ -282,7 +284,7 @@ async def vocab_stats_callback(
     kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton("◀️ Back", callback_data="menu_vocab")]]
     )
-    await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    await refresh_menu(query, context, text, reply_markup=kb, parse_mode="HTML")
 
 
 # ── Add Word flow ─────────────────────────────────────────────────────────────
@@ -531,7 +533,8 @@ async def back_to_vocab_menu(
     query = update.callback_query
     await query.answer()
     _clear_pending(context)
-    await query.edit_message_text(
+    await refresh_menu(
+        query, context,
         "📚 <b>Vocabulary</b>\nChoose an option:",
         reply_markup=VOCAB_MENU_KEYBOARD,
         parse_mode="HTML",
@@ -618,7 +621,8 @@ async def bulk_back(
     query = update.callback_query
     await query.answer()
     _clear_pending(context)
-    await query.edit_message_text(
+    await refresh_menu(
+        query, context,
         "📚 <b>Vocabulary</b>\nChoose an option:",
         reply_markup=VOCAB_MENU_KEYBOARD,
         parse_mode="HTML",

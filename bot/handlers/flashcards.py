@@ -13,6 +13,7 @@ from telegram.ext import (
     filters,
 )
 
+from bot.handlers.menu_utils import delete_old_menu
 from bot.models.progress import (
     count_due_tomorrow,
     get_due_cards,
@@ -298,6 +299,7 @@ async def flashcards_start(
 async def quick_review_command(
     update: Update, ctx: ContextTypes.DEFAULT_TYPE
 ) -> int:
+    await delete_old_menu(ctx, update.effective_chat.id)
     user_db_id = await _ensure_user(update)
     cards = await get_due_cards(user_db_id, limit=20)
 

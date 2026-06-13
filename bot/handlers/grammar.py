@@ -30,6 +30,7 @@ from bot.models.grammar import (
     save_grammar_module,
     update_progress,
 )
+from bot.handlers.menu_utils import refresh_menu
 from bot.models.review_log import get_grammar_stats_7days, log_grammar_review
 from bot.models.user import get_or_create_user, update_streak
 from bot.services.ai import generate_grammar_module
@@ -106,7 +107,8 @@ async def grammar_menu_callback(
     await query.answer()
     await _ensure_user(update)
     _learn_clear(context)
-    await query.edit_message_text(
+    await refresh_menu(
+        query, context,
         "📖 <b>Grammar</b>\nChoose an option:",
         reply_markup=GRAMMAR_MENU_KEYBOARD,
         parse_mode="HTML",
@@ -164,7 +166,7 @@ async def grammar_stats_callback(
     kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton("◀️ Back", callback_data="menu_grammar")]]
     )
-    await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    await refresh_menu(query, context, text, reply_markup=kb, parse_mode="HTML")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -172,10 +174,11 @@ async def grammar_stats_callback(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-async def _show_topic_list(query, user_db_id: int, *, for_quiz: bool = False) -> None:
+async def _show_topic_list(query, context, user_db_id: int, *, for_quiz: bool = False) -> None:
     topics = await get_all_topics(user_db_id)
     if not topics:
-        await query.edit_message_text(
+        await refresh_menu(
+            query, context,
             "No grammar topics found. Run the seed script first.",
             reply_markup=BACK_TO_GRAMMAR,
             parse_mode="HTML",
@@ -193,7 +196,8 @@ async def _show_topic_list(query, user_db_id: int, *, for_quiz: bool = False) ->
     buttons.append([InlineKeyboardButton("◀️ Back", callback_data=back_data)])
 
     title = "🎯 Choose a topic to quiz:" if for_quiz else "📖 Choose a topic to learn:"
-    await query.edit_message_text(
+    await refresh_menu(
+        query, context,
         title,
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="HTML",
@@ -206,7 +210,7 @@ async def learn_topics_callback(
     query = update.callback_query
     await query.answer()
     user_db_id = await _ensure_user(update)
-    await _show_topic_list(query, user_db_id)
+    await _show_topic_list(query, context, user_db_id)
 
 
 async def _show_rule(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -237,7 +241,8 @@ async def _show_rule(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     buttons.append([InlineKeyboardButton("🎯 Quiz This Topic", callback_data=f"gquiz_topic_{topic_id}")])
     buttons.append([InlineKeyboardButton("◀️ Back to Topics", callback_data="grammar_learn")])
 
-    await query.edit_message_text(
+    await refresh_menu(
+        query, context,
         text,
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="HTML",
@@ -254,12 +259,13 @@ async def learn_topic_selected(
     topic_id = int(query.data.split("_")[-1])
     topic = await get_topic_by_id(topic_id, user_db_id)
     if not topic:
-        await query.edit_message_text("Topic not found.", reply_markup=BACK_TO_GRAMMAR)
+        await refresh_menu(query, context, "Topic not found.", reply_markup=BACK_TO_GRAMMAR)
         return
 
     rules = await get_rules_for_topic(topic_id, user_db_id)
     if not rules:
-        await query.edit_message_text(
+        await refresh_menu(
+            query, context,
             "No rules found for this topic.",
             reply_markup=BACK_TO_GRAMMAR,
         )
@@ -281,7 +287,7 @@ async def learn_nav_callback(
 
     state = _learn_state(context)
     if not state:
-        await query.edit_message_text("Session expired.", reply_markup=BACK_TO_GRAMMAR)
+        await refresh_menu(query, context, "Session expired.", reply_markup=BACK_TO_GRAMMAR)
         return
 
     if query.data == "glearn_next":
@@ -303,7 +309,8 @@ async def quiz_menu_callback(
     query = update.callback_query
     await query.answer()
     await _ensure_user(update)
-    await query.edit_message_text(
+    await refresh_menu(
+        query, context,
         "🎯 <b>Grammar Quiz</b>\nChoose quiz type:",
         reply_markup=QUIZ_TYPE_KEYBOARD,
         parse_mode="HTML",
@@ -316,7 +323,7 @@ async def quiz_by_topic_callback(
     query = update.callback_query
     await query.answer()
     user_db_id = await _ensure_user(update)
-    await _show_topic_list(query, user_db_id, for_quiz=True)
+    await _show_topic_list(query, context, user_db_id, for_quiz=True)
 
 
 def _build_session(user_db_id: int, questions: list[dict]) -> dict:
