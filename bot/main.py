@@ -45,6 +45,10 @@ def main() -> None:
         .token(TELEGRAM_BOT_TOKEN)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .pool_timeout(10.0)
         .build()
     )
 

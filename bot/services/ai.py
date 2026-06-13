@@ -56,6 +56,16 @@ def _parse_json(text: str):
     return json.loads(text)
 
 
+def _normalize_entry(entry: dict) -> dict:
+    for key in VOCAB_FIELDS:
+        val = entry.get(key)
+        if isinstance(val, list):
+            entry[key] = ", ".join(str(v) for v in val)
+        elif val is not None and not isinstance(val, str):
+            entry[key] = str(val)
+    return entry
+
+
 async def generate_vocab_entry(word: str, provided: dict[str, str]) -> dict[str, str]:
     client = _get_client()
 
@@ -80,7 +90,7 @@ async def generate_vocab_entry(word: str, provided: dict[str, str]) -> dict[str,
         )
         content = resp.choices[0].message.content
         try:
-            return _parse_json(content)
+            return _normalize_entry(_parse_json(content))
         except json.JSONDecodeError:
             if attempt == 0:
                 logger.warning("JSON parse failed for '%s', retrying. Raw: %s", word, content[:200])
@@ -131,6 +141,7 @@ async def generate_vocab_entries_partial(
             if not isinstance(results, list):
                 raise ValueError("Expected a JSON array")
             for i, result in enumerate(results):
+                _normalize_entry(result)
                 if i < len(entries):
                     result["word_phrase"] = entries[i]["word_phrase"]
             return results[: len(entries)]
@@ -171,6 +182,7 @@ async def generate_vocab_entries_bulk(words: list[str]) -> list[dict[str, str]]:
             if not isinstance(entries, list):
                 raise ValueError("Expected a JSON array")
             for i, entry in enumerate(entries):
+                _normalize_entry(entry)
                 if i < len(words):
                     entry["word_phrase"] = words[i]
             return entries[: len(words)]

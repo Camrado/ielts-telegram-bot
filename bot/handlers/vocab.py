@@ -272,6 +272,9 @@ async def vocab_add_start(
         "| coll: reluctant to admit</code>\n\n"
         "I'll use AI to fill in anything you don't provide.",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("◀️ Back", callback_data="vadd_back_vocab")]]
+        ),
     )
     return ADD_WAITING
 
@@ -431,6 +434,9 @@ async def start_edit(
         "Fields: definition, synonyms, collocations, example, cefr_level\n\n"
         "Example: <code>definition: a new definition here</code>",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("❌ Cancel Edit", callback_data="vadd_cancel_edit")]]
+        ),
     )
     return ADD_EDITING
 
@@ -472,6 +478,34 @@ async def receive_edit(
     return ADD_CONFIRM
 
 
+async def cancel_edit(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    entry = context.user_data["pending_entry"]
+    word = entry.get("word_phrase", "")
+    text = format_entry(word, entry)
+    await query.edit_message_text(
+        text, reply_markup=CONFIRM_KEYBOARD, parse_mode="HTML"
+    )
+    return ADD_CONFIRM
+
+
+async def back_to_vocab_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    _clear_pending(context)
+    await query.edit_message_text(
+        "📚 <b>Vocabulary</b>\nChoose an option:",
+        reply_markup=VOCAB_MENU_KEYBOARD,
+        parse_mode="HTML",
+    )
+    return ConversationHandler.END
+
+
 async def cancel_add(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
@@ -511,6 +545,9 @@ async def bulk_word_list_start(
         "Send me a list of words, one per line:\n\n"
         "<code>exacerbate\nmeticulous\nunprecedented\ndetrimental</code>",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("◀️ Back", callback_data="vbulk_back_method")]]
+        ),
     )
     return BULK_WAITING
 
@@ -1094,6 +1131,7 @@ def build_vocab_conversation_handler() -> ConversationHandler:
         states={
             ADD_WAITING: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_word),
+                CallbackQueryHandler(back_to_vocab_menu, pattern="^vadd_back_vocab$"),
             ],
             ADD_CONFIRM: [
                 CallbackQueryHandler(save_entry, pattern="^vadd_save$"),
@@ -1107,6 +1145,7 @@ def build_vocab_conversation_handler() -> ConversationHandler:
             ],
             ADD_EDITING: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_edit),
+                CallbackQueryHandler(cancel_edit, pattern="^vadd_cancel_edit$"),
             ],
             BULK_METHOD: [
                 CallbackQueryHandler(
@@ -1117,6 +1156,9 @@ def build_vocab_conversation_handler() -> ConversationHandler:
             ],
             BULK_WAITING: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_list),
+                CallbackQueryHandler(
+                    bulk_back_to_method, pattern="^vbulk_back_method$"
+                ),
             ],
             FILE_WAITING: [
                 MessageHandler(filters.Document.ALL, receive_file),
