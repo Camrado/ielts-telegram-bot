@@ -63,6 +63,48 @@ async def check_duplicates_bulk(user_id: int, words: list[str]) -> set[str]:
     return {row["w"] for row in rows}
 
 
+async def count_user_words(user_id: int) -> int:
+    pool = get_pool()
+    return await pool.fetchval(
+        "SELECT COUNT(*) FROM vocabulary WHERE user_id = $1",
+        user_id,
+    ) or 0
+
+
+async def get_random_distractors(
+    user_id: int, exclude_word_id: int, field: str, limit: int = 3
+) -> list[str]:
+    allowed = {"definition", "word_phrase", "synonyms"}
+    if field not in allowed:
+        raise ValueError(f"Invalid field: {field}")
+    pool = get_pool()
+    rows = await pool.fetch(
+        f"""SELECT {field} FROM vocabulary
+            WHERE user_id = $1 AND id != $2
+              AND {field} IS NOT NULL AND {field} != ''
+            ORDER BY random()
+            LIMIT $3""",
+        user_id,
+        exclude_word_id,
+        limit,
+    )
+    return [row[field] for row in rows]
+
+
+async def get_random_user_words(user_id: int, limit: int = 10) -> list[dict]:
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT id, word_phrase, definition, synonyms, collocations, example, cefr_level
+           FROM vocabulary
+           WHERE user_id = $1
+           ORDER BY random()
+           LIMIT $2""",
+        user_id,
+        limit,
+    )
+    return [dict(row) for row in rows]
+
+
 async def insert_words_bulk(user_id: int, entries: list[dict]) -> list[int]:
     pool = get_pool()
     word_ids = []

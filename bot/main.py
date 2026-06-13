@@ -1,12 +1,13 @@
 import logging
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 from bot.config import TELEGRAM_BOT_TOKEN
 from bot.database import close_pool, create_pool, init_db
 from bot.handlers.grammar import grammar_menu_callback, grammar_stub_callback
 from bot.handlers.start import help_command, main_menu_callback, start_command
+from bot.handlers.flashcards import build_flashcard_conversation_handler
 from bot.handlers.vocab import (
     build_vocab_conversation_handler,
     vocab_menu_callback,
@@ -23,6 +24,11 @@ logger = logging.getLogger(__name__)
 async def post_init(application: Application) -> None:
     await create_pool()
     await init_db()
+    await application.bot.set_my_commands([
+        BotCommand("start", "Open main menu"),
+        BotCommand("help", "How to use this bot"),
+        BotCommand("cancel", "Cancel current action"),
+    ])
     logger.info("Bot initialized — database ready")
 
 
@@ -60,6 +66,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(grammar_menu_callback, pattern="^menu_grammar$"))
 
     app.add_handler(build_vocab_conversation_handler())
+    app.add_handler(build_flashcard_conversation_handler())
 
     app.add_handler(CallbackQueryHandler(vocab_stub_callback, pattern="^vocab_"))
     app.add_handler(CallbackQueryHandler(grammar_stub_callback, pattern="^grammar_"))
