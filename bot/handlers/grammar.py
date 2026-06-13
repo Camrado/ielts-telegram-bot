@@ -17,6 +17,7 @@ from telegram.ext import (
 from bot.models.grammar import (
     delete_topic_cascade,
     find_duplicate_topic,
+    get_all_progress,
     get_all_questions,
     get_all_topics,
     get_or_create_progress,
@@ -29,7 +30,8 @@ from bot.models.grammar import (
     save_grammar_module,
     update_progress,
 )
-from bot.models.user import get_or_create_user
+from bot.models.review_log import get_grammar_stats_7days, log_grammar_review
+from bot.models.user import get_or_create_user, update_streak
 from bot.services.ai import generate_grammar_module
 from bot.utils import levenshtein
 
@@ -61,7 +63,6 @@ QUIZ_TYPE_KEYBOARD = InlineKeyboardMarkup([
     [InlineKeyboardButton("◀️ Back", callback_data="menu_grammar")],
 ])
 
-COMING_SOON = "🚧 Coming soon — this feature will be available in the next update."
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -112,18 +113,58 @@ async def grammar_menu_callback(
     )
 
 
-async def grammar_stub_callback(
+MASTERY_EMOJI = {
+    "new": "🆕",
+    "learning": "📖",
+    "familiar": "📗",
+    "mastered": "✅",
+}
+
+
+async def grammar_stats_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(
-        COMING_SOON,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("◀️ Back", callback_data="menu_grammar")],
-        ]),
-        parse_mode="HTML",
+    user_db_id = await _ensure_user(update)
+
+    all_topics = await get_all_topics(user_db_id)
+    progress_list = await get_all_progress(user_db_id)
+
+    total_topics = len(all_topics)
+    mastered = sum(1 for p in progress_list if p["mastery_level"] == "mastered")
+    in_progress = sum(1 for p in progress_list if p["mastery_level"] in ("learning", "familiar"))
+
+    topic_lines = []
+    for p in progress_list:
+        emoji = MASTERY_EMOJI.get(p["mastery_level"], "🆕")
+        attempted = p["questions_attempted"]
+        correct = p["questions_correct"]
+        acc = round(correct / attempted * 100) if attempted else 0
+        topic_lines.append(
+            f"  • {p['topic_name']}: {emoji} {acc}% ({attempted} questions)"
+        )
+
+    week = await get_grammar_stats_7days(user_db_id)
+
+    text = (
+        "📊 <b>Grammar Statistics</b>\n\n"
+        f"📖 Topics: {total_topics} ({mastered} mastered, {in_progress} in progress)\n\n"
     )
+
+    if topic_lines:
+        text += "<b>Topic Breakdown:</b>\n" + "\n".join(topic_lines) + "\n\n"
+
+    text += (
+        "📈 <b>Last 7 days:</b>\n"
+        f"  • Questions answered: {week['answered']}\n"
+        f"  • Accuracy: {week['accuracy']}%"
+    )
+
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("◀️ Back", callback_data="menu_grammar")]]
+    )
+    await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -490,6 +531,8 @@ async def _handle_gq_answer(
 
     if current_idx not in ses["_answered_indices"]:
         _record_result(ses, is_correct)
+        await log_grammar_review(ses["user_db_id"], q["id"], is_correct)
+        await update_streak(ses["user_db_id"])
         ses["answered"] += 1
         if is_correct:
             ses["correct"] += 1

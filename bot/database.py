@@ -124,5 +124,30 @@ async def init_db() -> None:
                 band_target     text,
                 created_at      timestamp DEFAULT now()
             );
+
+            CREATE TABLE IF NOT EXISTS review_log (
+                id              serial PRIMARY KEY,
+                user_id         int NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                word_id         int REFERENCES vocabulary(id) ON DELETE SET NULL,
+                question_id     int REFERENCES grammar_questions(id) ON DELETE SET NULL,
+                category        text NOT NULL,
+                correct         boolean NOT NULL,
+                reviewed_at     timestamp DEFAULT now()
+            );
         """)
+
+        for col, definition in [
+            ("current_streak", "int DEFAULT 0"),
+            ("longest_streak", "int DEFAULT 0"),
+            ("last_review_date", "date"),
+            ("last_active_today", "boolean DEFAULT false"),
+            ("reminders_enabled", "boolean DEFAULT true"),
+        ]:
+            try:
+                await conn.execute(
+                    f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {definition}"
+                )
+            except Exception:
+                pass
+
     logger.info("Database tables initialized")

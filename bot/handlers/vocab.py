@@ -13,10 +13,12 @@ from telegram.ext import (
     filters,
 )
 
-from bot.models.progress import create_vocab_progress
-from bot.models.user import get_or_create_user
+from bot.models.progress import create_vocab_progress, get_srs_status, get_vocab_by_level
+from bot.models.review_log import get_new_words_7days, get_vocab_stats_7days
+from bot.models.user import get_or_create_user, get_user_streak
 from bot.models.vocabulary import (
     check_duplicates_bulk,
+    count_user_words,
     find_duplicate,
     insert_word,
     insert_words_bulk,
@@ -106,7 +108,6 @@ BULK_RESULT_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
-COMING_SOON = "🚧 Coming soon — this feature will be available in the next update."
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -238,18 +239,50 @@ async def vocab_menu_callback(
     )
 
 
-async def vocab_stub_callback(
+async def vocab_stats_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     query = update.callback_query
     await query.answer()
-    await _ensure_user(update)
-    await query.edit_message_text(
-        COMING_SOON,
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("◀️ Back", callback_data="menu_vocab")]]
-        ),
+    user_db_id = await _ensure_user(update)
+
+    total = await count_user_words(user_db_id)
+    by_level = await get_vocab_by_level(user_db_id)
+    srs = await get_srs_status(user_db_id)
+    week = await get_vocab_stats_7days(user_db_id)
+    new_words = await get_new_words_7days(user_db_id)
+    streak = await get_user_streak(user_db_id)
+
+    level_parts = []
+    for lvl in ("B2", "C1", "C2"):
+        n = by_level.get(lvl, 0)
+        if n:
+            level_parts.append(f"{lvl}: {n}")
+    others = sum(v for k, v in by_level.items() if k not in ("B2", "C1", "C2"))
+    if others:
+        level_parts.append(f"Other: {others}")
+    level_str = " | ".join(level_parts) if level_parts else "—"
+
+    text = (
+        "📊 <b>Vocabulary Statistics</b>\n\n"
+        f"📚 Total words: {total}\n"
+        f"📊 By level: {level_str}\n\n"
+        "🔁 <b>SRS Status:</b>\n"
+        f"  • Due now: {srs['due_now']}\n"
+        f"  • Learning (interval &lt; 7 days): {srs['learning']}\n"
+        f"  • Young (7–21 days): {srs['young']}\n"
+        f"  • Mature (21+ days): {srs['mature']}\n\n"
+        "📈 <b>Last 7 days:</b>\n"
+        f"  • Cards reviewed: {week['reviewed']}\n"
+        f"  • Accuracy: {week['accuracy']}%\n"
+        f"  • New words added: {new_words}\n\n"
+        f"🔥 Streak: {streak['current_streak']} days"
     )
+
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("◀️ Back", callback_data="menu_vocab")]]
+    )
+    await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 # ── Add Word flow ─────────────────────────────────────────────────────────────

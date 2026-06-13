@@ -19,7 +19,8 @@ from bot.models.progress import (
     get_earliest_review,
     update_vocab_progress,
 )
-from bot.models.user import get_or_create_user
+from bot.models.review_log import log_vocab_review
+from bot.models.user import get_or_create_user, update_streak
 from bot.models.vocabulary import (
     count_user_words,
     get_random_distractors,
@@ -294,6 +295,40 @@ async def flashcards_start(
     return await _show_card(update, ctx, edit_message=query.message)
 
 
+async def quick_review_command(
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE
+) -> int:
+    user_db_id = await _ensure_user(update)
+    cards = await get_due_cards(user_db_id, limit=20)
+
+    if not cards:
+        earliest = await get_earliest_review(user_db_id)
+        if earliest:
+            ts = earliest.strftime("%b %d, %H:%M")
+            text = f"🎉 No cards due for review! Next review: {ts}."
+        else:
+            text = "🎉 No cards due! Add some words first."
+        await update.message.reply_text(text, reply_markup=BACK_TO_VOCAB)
+        return ConversationHandler.END
+
+    count = len(cards)
+    ctx.user_data["fc_session"] = {
+        "mode": "flashcard",
+        "user_db_id": user_db_id,
+        "cards": cards,
+        "current": 0,
+        "correct": 0,
+        "answered": 0,
+        "total": count,
+        "card_type": None,
+        "correct_answer": None,
+        "correct_option_index": None,
+        "_answered_indices": [],
+    }
+
+    return await _show_card(update, ctx)
+
+
 async def quiz_start(
     update: Update, ctx: ContextTypes.DEFAULT_TYPE
 ) -> int:
@@ -370,13 +405,16 @@ async def _handle_answer(
     current_idx = ses["current"]
 
     if current_idx not in ses["_answered_indices"]:
+        card = ses["cards"][current_idx]
         if ses["mode"] == "flashcard":
-            card = ses["cards"][current_idx]
             quality = 4 if is_correct else 1
             ef, interval, reps = sm2_update(
                 card["ease_factor"], card["interval_days"], card["repetitions"], quality,
             )
             await update_vocab_progress(card["progress_id"], ef, interval, reps)
+
+        await log_vocab_review(ses["user_db_id"], card["id"], is_correct)
+        await update_streak(ses["user_db_id"])
 
         ses["answered"] += 1
         if is_correct:
@@ -513,6 +551,7 @@ async def cancel_fc(
 def build_flashcard_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
+            CommandHandler("review", quick_review_command),
             CallbackQueryHandler(flashcards_start, pattern="^vocab_flashcards$"),
             CallbackQueryHandler(quiz_start, pattern="^vocab_quiz$"),
         ],

@@ -204,6 +204,20 @@ async def get_unpracticed_topic_ids(user_db_id: int) -> list[int]:
 # ── Topic generation helpers ──────────────────────────────────────────────
 
 
+async def get_all_progress(user_db_id: int) -> list[dict]:
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT gp.topic_id, gt.name AS topic_name,
+                  gp.questions_attempted, gp.questions_correct, gp.mastery_level
+           FROM grammar_progress gp
+           JOIN grammar_topics gt ON gt.id = gp.topic_id
+           WHERE gp.user_id = $1
+           ORDER BY gt.name""",
+        user_db_id,
+    )
+    return [dict(r) for r in rows]
+
+
 async def find_duplicate_topic(user_db_id: int, topic_name: str) -> dict | None:
     pool = get_pool()
     row = await pool.fetchrow(

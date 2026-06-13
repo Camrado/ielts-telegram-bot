@@ -3,6 +3,39 @@ from datetime import datetime
 from bot.database import get_pool
 
 
+async def get_vocab_by_level(user_id: int) -> dict[str, int]:
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT COALESCE(cefr_level, 'Unknown') AS level, COUNT(*) AS cnt
+           FROM vocabulary WHERE user_id = $1
+           GROUP BY cefr_level""",
+        user_id,
+    )
+    return {row["level"]: row["cnt"] for row in rows}
+
+
+async def get_srs_status(user_id: int) -> dict:
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """SELECT
+               COUNT(*) FILTER (WHERE next_review <= now()) AS due_now,
+               COUNT(*) FILTER (WHERE interval_days < 7) AS learning,
+               COUNT(*) FILTER (WHERE interval_days >= 7 AND interval_days < 21) AS young,
+               COUNT(*) FILTER (WHERE interval_days >= 21) AS mature
+           FROM vocab_progress WHERE user_id = $1""",
+        user_id,
+    )
+    return dict(row) if row else {"due_now": 0, "learning": 0, "young": 0, "mature": 0}
+
+
+async def count_due_now(user_id: int) -> int:
+    pool = get_pool()
+    return await pool.fetchval(
+        "SELECT COUNT(*) FROM vocab_progress WHERE user_id = $1 AND next_review <= now()",
+        user_id,
+    ) or 0
+
+
 async def create_vocab_progress(user_id: int, word_id: int) -> int:
     pool = get_pool()
     return await pool.fetchval(
