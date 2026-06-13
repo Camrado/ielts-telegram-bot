@@ -1,4 +1,5 @@
 import logging
+
 from telegram import Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
@@ -6,7 +7,11 @@ from bot.config import TELEGRAM_BOT_TOKEN
 from bot.database import close_pool, create_pool, init_db
 from bot.handlers.grammar import grammar_menu_callback, grammar_stub_callback
 from bot.handlers.start import help_command, main_menu_callback, start_command
-from bot.handlers.vocab import vocab_menu_callback, vocab_stub_callback
+from bot.handlers.vocab import (
+    build_vocab_conversation_handler,
+    vocab_menu_callback,
+    vocab_stub_callback,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -49,6 +54,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^back_main$"))
     app.add_handler(CallbackQueryHandler(vocab_menu_callback, pattern="^menu_vocab$"))
     app.add_handler(CallbackQueryHandler(grammar_menu_callback, pattern="^menu_grammar$"))
+
+    app.add_handler(build_vocab_conversation_handler())
 
     app.add_handler(CallbackQueryHandler(vocab_stub_callback, pattern="^vocab_"))
     app.add_handler(CallbackQueryHandler(grammar_stub_callback, pattern="^grammar_"))
