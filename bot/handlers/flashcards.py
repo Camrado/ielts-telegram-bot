@@ -67,6 +67,29 @@ def _create_cloze(text: str, word_phrase: str) -> tuple[str, str] | None:
     return None
 
 
+def _get_vocab_hint(card: dict, ctype: int) -> str:
+    if ctype == 1:
+        if card.get("synonyms"):
+            return f"🔄 Synonyms: {card['synonyms']}"
+        if card.get("example"):
+            return f'📝 Example: "{card["example"]}"'
+    elif ctype == 2:
+        if card.get("example"):
+            return f'📝 Example: "{card["example"]}"'
+        if card.get("synonyms"):
+            return f"🔄 Synonyms: {card['synonyms']}"
+    elif ctype == 3:
+        if card.get("definition"):
+            return f"📖 Definition: {card['definition']}"
+    elif ctype == 4:
+        if card.get("definition"):
+            return f"📖 Definition: {card['definition']}"
+    elif ctype == 5:
+        if card.get("definition"):
+            return f"📖 Definition: {card['definition']}"
+    return ""
+
+
 # ── Card-type selection ──────────────────────────────────────────────────────
 
 
@@ -153,11 +176,9 @@ async def _make_question(
         if not valid:
             return await _make_question(card, 1, user_db_id)
         _, (cloze, answer) = random.choice(valid)
-        hint = html.escape(card.get("definition", ""))
         return (
             f"🤝 Complete the collocation:\n\n"
             f"\"{html.escape(cloze)}\"\n\n"
-            f"💡 Hint: {hint}\n\n"
             f"Type the missing word:",
             None,
             answer,
@@ -226,11 +247,17 @@ async def _show_card(
     ses["correct_answer"] = answer
     ses["correct_option_index"] = correct_idx
 
-    quit_row = [InlineKeyboardButton("❌ Quit", callback_data="fc_quit")]
+    hint = _get_vocab_hint(card, ctype)
+    ses["hint_text"] = hint
+
+    bottom_row = []
+    if hint:
+        bottom_row.append(InlineKeyboardButton("💡 Hint", callback_data="fc_hint"))
+    bottom_row.append(InlineKeyboardButton("❌ Quit", callback_data="fc_quit"))
     if kb:
-        kb = InlineKeyboardMarkup(kb.inline_keyboard + [quit_row])
+        kb = InlineKeyboardMarkup(kb.inline_keyboard + [bottom_row])
     else:
-        kb = InlineKeyboardMarkup([quit_row])
+        kb = InlineKeyboardMarkup([bottom_row])
 
     cur = ses["current"] + 1
     total = ses["total"]
@@ -442,6 +469,37 @@ async def _handle_answer(
     return FC_WAITING_NEXT
 
 
+async def show_hint(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    ses = _session(ctx)
+    if not ses:
+        await query.edit_message_text("Session expired.", reply_markup=BACK_TO_VOCAB)
+        return ConversationHandler.END
+
+    hint = ses.get("hint_text", "")
+    if not hint:
+        return FC_WAITING_ANSWER
+
+    old_text = query.message.text_html
+    new_text = old_text + f"\n\n💡 <b>Hint:</b> {html.escape(hint)}"
+
+    old_kb = query.message.reply_markup
+    new_rows = []
+    for row in old_kb.inline_keyboard:
+        new_row = [btn for btn in row if btn.callback_data != "fc_hint"]
+        if new_row:
+            new_rows.append(new_row)
+
+    await query.edit_message_text(
+        new_text,
+        reply_markup=InlineKeyboardMarkup(new_rows),
+        parse_mode="HTML",
+    )
+    return FC_WAITING_ANSWER
+
+
 async def process_text_answer(
     update: Update, ctx: ContextTypes.DEFAULT_TYPE
 ) -> int:
@@ -561,6 +619,7 @@ def build_flashcard_conversation_handler() -> ConversationHandler:
             FC_WAITING_ANSWER: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_text_answer),
                 CallbackQueryHandler(process_mcq_answer, pattern=r"^fc_ans_\d$"),
+                CallbackQueryHandler(show_hint, pattern="^fc_hint$"),
                 CallbackQueryHandler(quit_session, pattern="^fc_quit$"),
             ],
             FC_WAITING_NEXT: [

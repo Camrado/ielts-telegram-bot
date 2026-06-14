@@ -418,6 +418,12 @@ async def _show_question(
 
     prompt_text = html.escape(q["prompt"])
 
+    ses["hint_text"] = q.get("explanation", "")
+    bottom_row = []
+    if ses["hint_text"]:
+        bottom_row.append(InlineKeyboardButton("💡 Hint", callback_data="gq_hint"))
+    bottom_row.append(InlineKeyboardButton("❌ Quit", callback_data="gq_quit"))
+
     if qtype == "fill_blank":
         wrong = q["wrong_answers"]
         if wrong:
@@ -433,7 +439,7 @@ async def _show_question(
                 for i in range(len(options))
             ]]
             text = f"🎯 Quiz: {cur}/{total}\n\n📝 Fill in the blank:\n\n{prompt_text}\n\n{option_lines}"
-            buttons.append([InlineKeyboardButton("❌ Quit", callback_data="gq_quit")])
+            buttons.append(bottom_row)
             await message.edit_text(
                 text,
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -441,7 +447,7 @@ async def _show_question(
             )
         else:
             text = f"🎯 Quiz: {cur}/{total}\n\n📝 Fill in the blank:\n\n{prompt_text}\n\nType your answer:"
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Quit", callback_data="gq_quit")]])
+            kb = InlineKeyboardMarkup([bottom_row])
             await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     elif qtype == "correct_or_incorrect":
@@ -451,7 +457,7 @@ async def _show_question(
                 InlineKeyboardButton("✅ Correct", callback_data="gq_ci_correct"),
                 InlineKeyboardButton("❌ Incorrect", callback_data="gq_ci_incorrect"),
             ],
-            [InlineKeyboardButton("❌ Quit", callback_data="gq_quit")],
+            bottom_row,
         ]
         await message.edit_text(
             text,
@@ -473,7 +479,7 @@ async def _show_question(
             for i in range(len(options))
         ]]
         text = f"🎯 Quiz: {cur}/{total}\n\n{prompt_text}\n\n{option_lines}"
-        buttons.append([InlineKeyboardButton("❌ Quit", callback_data="gq_quit")])
+        buttons.append(bottom_row)
         await message.edit_text(
             text,
             reply_markup=InlineKeyboardMarkup(buttons),
@@ -487,7 +493,7 @@ async def _show_question(
             f"<i>{prompt_text}</i>\n\n"
             f"Type the corrected sentence:"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Quit", callback_data="gq_quit")]])
+        kb = InlineKeyboardMarkup([bottom_row])
         await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     return GQ_WAITING_ANSWER
@@ -565,6 +571,39 @@ async def _handle_gq_answer(
         await update.message.reply_text(text, reply_markup=_result_kb(), parse_mode="HTML")
 
     return GQ_WAITING_NEXT
+
+
+async def show_grammar_hint(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    ses = _gq_session(context)
+    if not ses:
+        await query.edit_message_text("Session expired.", reply_markup=BACK_TO_GRAMMAR)
+        return ConversationHandler.END
+
+    hint = ses.get("hint_text", "")
+    if not hint:
+        return GQ_WAITING_ANSWER
+
+    old_text = query.message.text_html
+    new_text = old_text + f"\n\n💡 <b>Hint:</b> {html.escape(hint)}"
+
+    old_kb = query.message.reply_markup
+    new_rows = []
+    for row in old_kb.inline_keyboard:
+        new_row = [btn for btn in row if btn.callback_data != "gq_hint"]
+        if new_row:
+            new_rows.append(new_row)
+
+    await query.edit_message_text(
+        new_text,
+        reply_markup=InlineKeyboardMarkup(new_rows),
+        parse_mode="HTML",
+    )
+    return GQ_WAITING_ANSWER
 
 
 async def process_gq_mcq(
@@ -754,6 +793,7 @@ def build_grammar_quiz_conversation_handler() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_gq_text),
                 CallbackQueryHandler(process_gq_mcq, pattern=r"^gq_ans_\d$"),
                 CallbackQueryHandler(process_gq_correct_incorrect, pattern=r"^gq_ci_"),
+                CallbackQueryHandler(show_grammar_hint, pattern="^gq_hint$"),
                 CallbackQueryHandler(gq_quit, pattern="^gq_quit$"),
             ],
             GQ_WAITING_NEXT: [
@@ -903,6 +943,13 @@ async def _gat_execute_save(
                 )
                 _gat_clear(context)
                 return ConversationHandler.END
+
+            await _gat_respond(
+                f"⏳ Saving {len(unsaved)} rules...",
+                None,
+                edit_msg=edit_msg,
+                reply_msg=reply_msg,
+            )
 
             indices = unsaved if saved else None
             topic_id = await save_grammar_module(

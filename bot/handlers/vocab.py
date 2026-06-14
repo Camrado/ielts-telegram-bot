@@ -997,14 +997,25 @@ async def bulk_save_all(
         _clear_pending(context)
         return ConversationHandler.END
 
-    word_ids = await insert_words_bulk(user_db_id, entries)
-    for wid in word_ids:
-        await create_vocab_progress(user_db_id, wid)
+    await query.edit_message_text(f"⏳ Saving {len(entries)} words...")
 
-    await query.edit_message_text(
-        f"✅ Saved {len(word_ids)} words to your vocabulary.",
-        reply_markup=BACK_TO_VOCAB,
-    )
+    try:
+        word_ids = await insert_words_bulk(user_db_id, entries)
+        for wid in word_ids:
+            await create_vocab_progress(user_db_id, wid)
+
+        await query.edit_message_text(
+            f"✅ Saved {len(word_ids)} words to your vocabulary.",
+            reply_markup=BACK_TO_VOCAB,
+        )
+    except Exception as e:
+        logger.error("Failed to save bulk entries: %s", e)
+        await query.edit_message_text(
+            "❌ Failed to save. Please try again.",
+            reply_markup=BULK_RESULT_KEYBOARD,
+        )
+        return BULK_CONFIRM
+
     _clear_pending(context)
     return ConversationHandler.END
 
@@ -1075,14 +1086,22 @@ async def _handle_review_next(
     kept = context.user_data["bulk_kept"]
     if kept:
         user_db_id = await _ensure_user(update)
-        word_ids = await insert_words_bulk(user_db_id, kept)
-        for wid in word_ids:
-            await create_vocab_progress(user_db_id, wid)
-        skipped = len(entries) - len(kept)
-        await query.edit_message_text(
-            f"✅ Saved {len(kept)} words. {skipped} skipped.",
-            reply_markup=BACK_TO_VOCAB,
-        )
+        await query.edit_message_text(f"⏳ Saving {len(kept)} words...")
+        try:
+            word_ids = await insert_words_bulk(user_db_id, kept)
+            for wid in word_ids:
+                await create_vocab_progress(user_db_id, wid)
+            skipped = len(entries) - len(kept)
+            await query.edit_message_text(
+                f"✅ Saved {len(kept)} words. {skipped} skipped.",
+                reply_markup=BACK_TO_VOCAB,
+            )
+        except Exception as e:
+            logger.error("Failed to save reviewed entries: %s", e)
+            await query.edit_message_text(
+                "❌ Failed to save. Please try again later.",
+                reply_markup=BACK_TO_VOCAB,
+            )
     else:
         await query.edit_message_text(
             "No words kept. All entries discarded.",
@@ -1119,13 +1138,24 @@ async def review_save_remaining(
     all_to_save = kept + entries[index:]
 
     if all_to_save:
-        word_ids = await insert_words_bulk(user_db_id, all_to_save)
-        for wid in word_ids:
-            await create_vocab_progress(user_db_id, wid)
-        await query.edit_message_text(
-            f"✅ Saved {len(word_ids)} words to your vocabulary.",
-            reply_markup=BACK_TO_VOCAB,
-        )
+        await query.edit_message_text(f"⏳ Saving {len(all_to_save)} words...")
+        try:
+            word_ids = await insert_words_bulk(user_db_id, all_to_save)
+            for wid in word_ids:
+                await create_vocab_progress(user_db_id, wid)
+            await query.edit_message_text(
+                f"✅ Saved {len(word_ids)} words to your vocabulary.",
+                reply_markup=BACK_TO_VOCAB,
+            )
+        except Exception as e:
+            logger.error("Failed to save remaining entries: %s", e)
+            await query.edit_message_text(
+                "❌ Failed to save. Please try again.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("✅ Save Remaining", callback_data="vbulk_save_rest")]]
+                ),
+            )
+            return BULK_REVIEWING
     else:
         await query.edit_message_text(
             "No words to save.", reply_markup=BACK_TO_VOCAB
