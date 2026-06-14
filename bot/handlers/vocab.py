@@ -687,8 +687,8 @@ async def receive_list(
     failed_words: list[str] = []
     processed = 0
 
-    for i in range(0, total, 5):
-        batch = new_words[i : i + 5]
+    for i in range(0, total, 8):
+        batch = new_words[i : i + 8]
         generated = False
         for attempt in range(2):
             try:
@@ -704,7 +704,7 @@ async def receive_list(
         if not generated:
             failed_words.extend(batch)
 
-        processed = min(i + 5, total)
+        processed = min(i + 8, total)
         try:
             await progress_msg.edit_text(
                 f"Processing {total} words... ✅ {processed}/{total}"
@@ -895,9 +895,9 @@ async def _process_uploaded_file(
     processed_count = 0
     total_ai = needs_ai
 
-    # Empty entries → batch of 5
-    for i in range(0, len(empty_entries), 5):
-        batch = empty_entries[i : i + 5]
+    # Empty entries → batch of 8
+    for i in range(0, len(empty_entries), 8):
+        batch = empty_entries[i : i + 8]
         batch_words = [e["word_phrase"] for e in batch]
         generated = False
         for attempt in range(2):
@@ -927,9 +927,9 @@ async def _process_uploaded_file(
             except Exception:
                 pass
 
-    # Partial entries → batch of 3
-    for i in range(0, len(partial_entries), 3):
-        batch = partial_entries[i : i + 3]
+    # Partial entries → batch of 5
+    for i in range(0, len(partial_entries), 5):
+        batch = partial_entries[i : i + 5]
         generated = False
         for attempt in range(2):
             try:
