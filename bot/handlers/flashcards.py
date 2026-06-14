@@ -250,14 +250,15 @@ async def _show_card(
     hint = _get_vocab_hint(card, ctype)
     ses["hint_text"] = hint
 
+    idk_row = [InlineKeyboardButton("🤷 I don't know", callback_data="fc_idk")]
     bottom_row = []
     if hint:
         bottom_row.append(InlineKeyboardButton("💡 Hint", callback_data="fc_hint"))
     bottom_row.append(InlineKeyboardButton("❌ Quit", callback_data="fc_quit"))
     if kb:
-        kb = InlineKeyboardMarkup(kb.inline_keyboard + [bottom_row])
+        kb = InlineKeyboardMarkup(kb.inline_keyboard + [idk_row, bottom_row])
     else:
-        kb = InlineKeyboardMarkup([bottom_row])
+        kb = InlineKeyboardMarkup([idk_row, bottom_row])
 
     cur = ses["current"] + 1
     total = ses["total"]
@@ -536,6 +537,23 @@ async def process_mcq_answer(
     )
 
 
+async def process_idk(
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    ses = _session(ctx)
+    if not ses:
+        await query.edit_message_text("Session expired. Please start again.",
+                                      reply_markup=BACK_TO_VOCAB)
+        return ConversationHandler.END
+
+    return await _handle_answer(
+        update, ctx, False, ses["correct_answer"], edit_message=query.message,
+    )
+
+
 # ── Navigation ───────────────────────────────────────────────────────────────
 
 
@@ -619,6 +637,7 @@ def build_flashcard_conversation_handler() -> ConversationHandler:
             FC_WAITING_ANSWER: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_text_answer),
                 CallbackQueryHandler(process_mcq_answer, pattern=r"^fc_ans_\d$"),
+                CallbackQueryHandler(process_idk, pattern="^fc_idk$"),
                 CallbackQueryHandler(show_hint, pattern="^fc_hint$"),
                 CallbackQueryHandler(quit_session, pattern="^fc_quit$"),
             ],

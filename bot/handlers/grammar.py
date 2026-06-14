@@ -419,6 +419,7 @@ async def _show_question(
     prompt_text = html.escape(q["prompt"])
 
     ses["hint_text"] = q.get("explanation", "")
+    idk_row = [InlineKeyboardButton("🤷 I don't know", callback_data="gq_idk")]
     bottom_row = []
     if ses["hint_text"]:
         bottom_row.append(InlineKeyboardButton("💡 Hint", callback_data="gq_hint"))
@@ -439,6 +440,7 @@ async def _show_question(
                 for i in range(len(options))
             ]]
             text = f"🎯 Quiz: {cur}/{total}\n\n📝 Fill in the blank:\n\n{prompt_text}\n\n{option_lines}"
+            buttons.append(idk_row)
             buttons.append(bottom_row)
             await message.edit_text(
                 text,
@@ -447,7 +449,7 @@ async def _show_question(
             )
         else:
             text = f"🎯 Quiz: {cur}/{total}\n\n📝 Fill in the blank:\n\n{prompt_text}\n\nType your answer:"
-            kb = InlineKeyboardMarkup([bottom_row])
+            kb = InlineKeyboardMarkup([idk_row, bottom_row])
             await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     elif qtype == "correct_or_incorrect":
@@ -457,6 +459,7 @@ async def _show_question(
                 InlineKeyboardButton("✅ Correct", callback_data="gq_ci_correct"),
                 InlineKeyboardButton("❌ Incorrect", callback_data="gq_ci_incorrect"),
             ],
+            idk_row,
             bottom_row,
         ]
         await message.edit_text(
@@ -479,6 +482,7 @@ async def _show_question(
             for i in range(len(options))
         ]]
         text = f"🎯 Quiz: {cur}/{total}\n\n{prompt_text}\n\n{option_lines}"
+        buttons.append(idk_row)
         buttons.append(bottom_row)
         await message.edit_text(
             text,
@@ -493,7 +497,7 @@ async def _show_question(
             f"<i>{prompt_text}</i>\n\n"
             f"Type the corrected sentence:"
         )
-        kb = InlineKeyboardMarkup([bottom_row])
+        kb = InlineKeyboardMarkup([idk_row, bottom_row])
         await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     return GQ_WAITING_ANSWER
@@ -640,6 +644,22 @@ async def process_gq_correct_incorrect(
     is_correct = user_choice == q["correct_answer"]
     return await _handle_gq_answer(
         update, context, is_correct, edit_message=query.message,
+    )
+
+
+async def process_gq_idk(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    ses = _gq_session(context)
+    if not ses:
+        await query.edit_message_text("Session expired.", reply_markup=BACK_TO_GRAMMAR)
+        return ConversationHandler.END
+
+    return await _handle_gq_answer(
+        update, context, False, edit_message=query.message,
     )
 
 
@@ -793,6 +813,7 @@ def build_grammar_quiz_conversation_handler() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_gq_text),
                 CallbackQueryHandler(process_gq_mcq, pattern=r"^gq_ans_\d$"),
                 CallbackQueryHandler(process_gq_correct_incorrect, pattern=r"^gq_ci_"),
+                CallbackQueryHandler(process_gq_idk, pattern="^gq_idk$"),
                 CallbackQueryHandler(show_grammar_hint, pattern="^gq_hint$"),
                 CallbackQueryHandler(gq_quit, pattern="^gq_quit$"),
             ],
