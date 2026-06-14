@@ -23,6 +23,19 @@ async def delete_old_menu(context, chat_id):
 async def refresh_menu(query, context, text, reply_markup=None, parse_mode=None):
     chat_id = query.message.chat_id
     try:
+        edited = await query.edit_message_text(
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        msg_id = edited.message_id if hasattr(edited, 'message_id') else query.message.message_id
+        context.user_data[_KEY] = (chat_id, msg_id)
+        return edited if hasattr(edited, 'message_id') else query.message
+    except Exception as e:
+        if "not modified" in str(e).lower():
+            context.user_data[_KEY] = (chat_id, query.message.message_id)
+            return query.message
+    try:
         await query.delete_message()
     except Exception:
         pass

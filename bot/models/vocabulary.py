@@ -38,14 +38,17 @@ async def update_word(word_id: int, entry: dict) -> None:
     pool = get_pool()
     await pool.execute(
         """UPDATE vocabulary
-           SET definition = $1, synonyms = $2, collocations = $3,
-               example = $4, cefr_level = $5
+           SET definition   = COALESCE(NULLIF($1, ''), definition),
+               synonyms     = COALESCE(NULLIF($2, ''), synonyms),
+               collocations = COALESCE(NULLIF($3, ''), collocations),
+               example      = COALESCE(NULLIF($4, ''), example),
+               cefr_level   = COALESCE(NULLIF($5, ''), cefr_level)
            WHERE id = $6""",
-        entry.get("definition"),
-        entry.get("synonyms"),
-        entry.get("collocations"),
-        entry.get("example"),
-        entry.get("cefr_level"),
+        entry.get("definition") or "",
+        entry.get("synonyms") or "",
+        entry.get("collocations") or "",
+        entry.get("example") or "",
+        entry.get("cefr_level") or "",
         word_id,
     )
 

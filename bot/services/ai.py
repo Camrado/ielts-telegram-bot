@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 
 from openai import AsyncOpenAI
 
@@ -56,6 +57,16 @@ def _parse_json(text: str):
     return json.loads(text)
 
 
+_PROVIDED_RE = re.compile(r"^PROVIDED\s*\((.+)\)$", re.IGNORECASE | re.DOTALL)
+
+
+def _strip_provided_wrapper(value: str) -> str:
+    if not isinstance(value, str):
+        return value
+    m = _PROVIDED_RE.match(value.strip())
+    return m.group(1).strip() if m else value
+
+
 def _normalize_entry(entry: dict) -> dict:
     for key in VOCAB_FIELDS:
         val = entry.get(key)
@@ -63,6 +74,8 @@ def _normalize_entry(entry: dict) -> dict:
             entry[key] = ", ".join(str(v) for v in val)
         elif val is not None and not isinstance(val, str):
             entry[key] = str(val)
+        if isinstance(entry.get(key), str):
+            entry[key] = _strip_provided_wrapper(entry[key])
     return entry
 
 
@@ -90,7 +103,12 @@ async def generate_vocab_entry(word: str, provided: dict[str, str]) -> dict[str,
         )
         content = resp.choices[0].message.content
         try:
-            return _normalize_entry(_parse_json(content))
+            result = _normalize_entry(_parse_json(content))
+            for field in missing:
+                if not result.get(field):
+                    result[field] = ""
+                    logger.warning("AI omitted field '%s' for word '%s'", field, word)
+            return result
         except json.JSONDecodeError:
             if attempt == 0:
                 logger.warning("JSON parse failed for '%s', retrying. Raw: %s", word, content[:200])
@@ -105,25 +123,17 @@ async def generate_vocab_entries_partial(
 
     parts = []
     for i, entry in enumerate(entries, 1):
+        missing_fields = [f for f in VOCAB_FIELDS if not entry.get(f)]
         lines = [f"Word {i}: {entry['word_phrase']}"]
-        for field in VOCAB_FIELDS:
-            val = entry.get(field)
-            if val:
-                lines.append(f"- {field}: PROVIDED ({val})")
-            else:
-                lines.append(f"- {field}: MISSING")
+        lines.append(f"  Generate these fields: {', '.join(missing_fields)}")
         parts.append("\n".join(lines))
 
     user_msg = (
-        "For each word below, generate ONLY the fields marked as MISSING. "
-        "Do not overwrite fields marked as PROVIDED. "
-        "Return a JSON array with one object per word.\n\n"
+        "For each word below, generate ONLY the listed fields. "
+        "Return a JSON array with one object per word. "
+        "Each object must have 'word_phrase' plus ONLY the requested fields.\n\n"
         + "\n\n".join(parts)
-        + '\n\nFor each word, return: {"word_phrase": "...", "definition": "...", '
-        '"synonyms": "...", "collocations": "...", "example": "...", "cefr_level": "..."}\n'
-        "Include ALL fields in the response — copy PROVIDED values as-is "
-        "and fill in MISSING ones.\n"
-        "Respond ONLY with a valid JSON array, no markdown, no preamble."
+        + "\n\nRespond ONLY with a valid JSON array, no markdown, no preamble."
     )
 
     for attempt in range(2):
@@ -140,11 +150,24 @@ async def generate_vocab_entries_partial(
             results = _parse_json(content)
             if not isinstance(results, list):
                 raise ValueError("Expected a JSON array")
+
+            merged = []
             for i, result in enumerate(results):
                 _normalize_entry(result)
-                if i < len(entries):
-                    result["word_phrase"] = entries[i]["word_phrase"]
-            return results[: len(entries)]
+                if i >= len(entries):
+                    break
+                original = entries[i]
+                final = {"word_phrase": original["word_phrase"]}
+                for field in VOCAB_FIELDS:
+                    original_val = original.get(field)
+                    if original_val:
+                        final[field] = original_val
+                    elif result.get(field):
+                        final[field] = result[field]
+                    else:
+                        final[field] = ""
+                merged.append(final)
+            return merged
         except (json.JSONDecodeError, ValueError):
             if attempt == 0:
                 logger.warning(
@@ -252,6 +275,9 @@ async def generate_vocab_entries_bulk(words: list[str]) -> list[dict[str, str]]:
                 _normalize_entry(entry)
                 if i < len(words):
                     entry["word_phrase"] = words[i]
+                for field in VOCAB_FIELDS:
+                    if not entry.get(field):
+                        entry[field] = ""
             return entries[: len(words)]
         except (json.JSONDecodeError, ValueError):
             if attempt == 0:

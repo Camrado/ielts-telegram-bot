@@ -349,6 +349,8 @@ async def _generate_and_show(
     try:
         ai_result = await generate_vocab_entry(word, provided)
         entry = {**ai_result, **provided, "word_phrase": word}
+        for f in all_fields:
+            entry.setdefault(f, "")
         context.user_data["pending_entry"] = entry
         text = format_entry(word, entry)
         await target_msg.edit_text(
