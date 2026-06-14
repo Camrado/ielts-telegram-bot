@@ -27,6 +27,7 @@ from bot.models.vocabulary import (
     get_random_distractors,
     get_random_user_words,
 )
+from bot.services.ai import check_vocab_answer
 from bot.services.srs import sm2_update
 from bot.utils import levenshtein
 
@@ -408,6 +409,18 @@ def _check_text(user_answer: str, correct: str) -> bool:
     return u == c or levenshtein(u, c) <= 1
 
 
+def _check_synonyms(user_answer: str, card: dict) -> bool:
+    raw = card.get("synonyms", "")
+    if not raw:
+        return False
+    u = user_answer.strip().lower()
+    for syn in raw.split(","):
+        s = syn.strip().lower()
+        if s and (u == s or levenshtein(u, s) <= 1):
+            return True
+    return False
+
+
 def _result_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("Next →", callback_data="fc_next"),
@@ -514,7 +527,18 @@ async def process_text_answer(
         await update.message.reply_text("👆 Tap one of the buttons above to answer.")
         return FC_WAITING_ANSWER
 
-    is_correct = _check_text(update.message.text, ses["correct_answer"])
+    user_text = update.message.text
+    is_correct = _check_text(user_text, ses["correct_answer"])
+
+    if not is_correct and ses["card_type"] == 1:
+        card = ses["cards"][ses["current"]]
+        if _check_synonyms(user_text, card):
+            is_correct = True
+        elif card.get("definition"):
+            is_correct = await check_vocab_answer(
+                card["definition"], ses["correct_answer"], user_text,
+            )
+
     return await _handle_answer(update, ctx, is_correct, ses["correct_answer"])
 
 

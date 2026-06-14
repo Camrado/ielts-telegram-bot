@@ -247,6 +247,40 @@ async def generate_grammar_module(description: str) -> dict:
             )
 
 
+async def check_vocab_answer(definition: str, expected: str, user_answer: str) -> bool:
+    client = _get_client()
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-5.4-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a vocabulary judge. The user was given a definition "
+                        "and asked to provide a matching word or phrase. Decide if the "
+                        "user's answer is a valid match for the definition. "
+                        "Reply with ONLY 'YES' or 'NO'."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Definition: \"{definition}\"\n"
+                        f"Expected answer: \"{expected}\"\n"
+                        f"User's answer: \"{user_answer}\"\n\n"
+                        "Is the user's answer a valid word/phrase for this definition?"
+                    ),
+                },
+            ],
+            temperature=0,
+            max_tokens=3,
+        )
+        return resp.choices[0].message.content.strip().upper().startswith("YES")
+    except Exception:
+        logger.warning("AI answer check failed for '%s', falling back to incorrect", user_answer)
+        return False
+
+
 async def generate_vocab_entries_bulk(words: list[str]) -> list[dict[str, str]]:
     client = _get_client()
 
