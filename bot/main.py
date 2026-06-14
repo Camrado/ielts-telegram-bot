@@ -16,6 +16,7 @@ from bot.handlers.grammar import (
     quiz_by_topic_callback,
     quiz_menu_callback,
 )
+from bot.handlers.menu_utils import with_retry
 from bot.handlers.start import (
     help_command,
     main_menu_callback,
@@ -63,11 +64,19 @@ async def post_shutdown(application: Application) -> None:
 
 async def error_handler(update: object, context) -> None:
     logger.error("Exception while handling an update:", exc_info=context.error)
-    if isinstance(update, Update) and update.effective_message:
+    if isinstance(update, Update) and update.effective_chat:
+        from bot.handlers.menu_utils import delete_old_menu, track_menu
+        from bot.handlers.start import MAIN_MENU_KEYBOARD
+        chat_id = update.effective_chat.id
         try:
-            await update.effective_message.reply_text(
-                "⚠️ Something went wrong. Please try again later."
+            await delete_old_menu(context, chat_id)
+            msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ Something went wrong. Please try again.\n\nChoose a section:",
+                reply_markup=MAIN_MENU_KEYBOARD,
+                parse_mode="HTML",
             )
+            await track_menu(context, msg)
         except Exception:
             pass
 
@@ -104,26 +113,28 @@ def main() -> None:
         .build()
     )
 
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("stats", stats_command))
-    app.add_handler(CommandHandler("reminders", reminders_command))
+    _r = with_retry()
 
-    app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^back_main$"))
-    app.add_handler(CallbackQueryHandler(vocab_menu_callback, pattern="^menu_vocab$"))
-    app.add_handler(CallbackQueryHandler(grammar_menu_callback, pattern="^menu_grammar$"))
+    app.add_handler(CommandHandler("start", _r(start_command)))
+    app.add_handler(CommandHandler("help", _r(help_command)))
+    app.add_handler(CommandHandler("stats", _r(stats_command)))
+    app.add_handler(CommandHandler("reminders", _r(reminders_command)))
 
-    app.add_handler(CallbackQueryHandler(learn_topics_callback, pattern="^grammar_learn$"))
-    app.add_handler(CallbackQueryHandler(learn_topic_selected, pattern=r"^glearn_topic_\d+$"))
-    app.add_handler(CallbackQueryHandler(learn_nav_callback, pattern=r"^glearn_(prev|next)$"))
+    app.add_handler(CallbackQueryHandler(_r(main_menu_callback), pattern="^back_main$"))
+    app.add_handler(CallbackQueryHandler(_r(vocab_menu_callback), pattern="^menu_vocab$"))
+    app.add_handler(CallbackQueryHandler(_r(grammar_menu_callback), pattern="^menu_grammar$"))
 
-    app.add_handler(CallbackQueryHandler(quiz_menu_callback, pattern="^grammar_quiz$"))
-    app.add_handler(CallbackQueryHandler(quiz_by_topic_callback, pattern="^gquiz_by_topic$"))
+    app.add_handler(CallbackQueryHandler(_r(learn_topics_callback), pattern="^grammar_learn$"))
+    app.add_handler(CallbackQueryHandler(_r(learn_topic_selected), pattern=r"^glearn_topic_\d+$"))
+    app.add_handler(CallbackQueryHandler(_r(learn_nav_callback), pattern=r"^glearn_(prev|next)$"))
 
-    app.add_handler(CallbackQueryHandler(vocab_stats_callback, pattern="^vocab_stats$"))
-    app.add_handler(CallbackQueryHandler(grammar_stats_callback, pattern="^grammar_stats$"))
+    app.add_handler(CallbackQueryHandler(_r(quiz_menu_callback), pattern="^grammar_quiz$"))
+    app.add_handler(CallbackQueryHandler(_r(quiz_by_topic_callback), pattern="^gquiz_by_topic$"))
 
-    app.add_handler(CallbackQueryHandler(reminders_toggle_callback, pattern=r"^reminders_(on|off)$"))
+    app.add_handler(CallbackQueryHandler(_r(vocab_stats_callback), pattern="^vocab_stats$"))
+    app.add_handler(CallbackQueryHandler(_r(grammar_stats_callback), pattern="^grammar_stats$"))
+
+    app.add_handler(CallbackQueryHandler(_r(reminders_toggle_callback), pattern=r"^reminders_(on|off)$"))
 
     app.add_handler(build_vocab_conversation_handler())
     app.add_handler(build_flashcard_conversation_handler())
