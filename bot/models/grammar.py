@@ -230,6 +230,48 @@ async def find_duplicate_topic(user_db_id: int, topic_name: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _topic_keywords(name: str) -> set[str]:
+    stop = {"a", "an", "the", "and", "or", "in", "of", "for", "to", "with", "—", "-", "–"}
+    words = set()
+    for w in name.lower().replace("—", " ").replace("–", " ").replace("-", " ").split():
+        w = w.strip(",.:;()[]")
+        if w and w not in stop:
+            words.add(w)
+    return words
+
+
+async def find_similar_topic(user_db_id: int, topic_name: str) -> dict | None:
+    exact = await find_duplicate_topic(user_db_id, topic_name)
+    if exact:
+        return exact
+
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT id, name, user_id FROM grammar_topics
+           WHERE user_id = $1 OR user_id IS NULL""",
+        user_db_id,
+    )
+
+    new_kw = _topic_keywords(topic_name)
+    if not new_kw:
+        return None
+
+    best, best_score = None, 0.0
+    for row in rows:
+        existing_kw = _topic_keywords(row["name"])
+        if not existing_kw:
+            continue
+        overlap = len(new_kw & existing_kw)
+        score = overlap / min(len(new_kw), len(existing_kw))
+        if score > best_score:
+            best_score = score
+            best = row
+
+    if best_score >= 0.5:
+        return dict(best)
+    return None
+
+
 async def save_grammar_module(
     user_db_id: int,
     topic_data: dict,
@@ -242,6 +284,7 @@ async def save_grammar_module(
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            sort_offset = 0
             if topic_id is None:
                 topic_id = await conn.fetchval(
                     """INSERT INTO grammar_topics
@@ -258,6 +301,13 @@ async def save_grammar_module(
                     user_db_id,
                     topic_id,
                 )
+            else:
+                max_order = await conn.fetchval(
+                    """SELECT COALESCE(MAX(sort_order), 0)
+                       FROM grammar_rules WHERE topic_id = $1""",
+                    topic_id,
+                )
+                sort_offset = max_order
 
             rule_title_to_id = {}
             for i, rule in enumerate(rules):
@@ -275,7 +325,7 @@ async def save_grammar_module(
                     rule["correct_example"],
                     rule["incorrect_example"],
                     rule.get("tip", ""),
-                    rule.get("sort_order", i + 1),
+                    sort_offset + rule.get("sort_order", i + 1),
                 )
                 rule_title_to_id[rule["rule_title"]] = rid
 

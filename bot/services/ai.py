@@ -217,15 +217,27 @@ Respond ONLY with valid JSON, no markdown fences, no preamble:
 }"""
 
 
-async def generate_grammar_module(description: str) -> dict:
+async def generate_grammar_module(
+    description: str, existing_topic_names: list[str] | None = None
+) -> dict:
     client = _get_client()
+
+    user_msg = description
+    if existing_topic_names:
+        names_list = "\n".join(f"- {n}" for n in existing_topic_names)
+        user_msg = (
+            f"{description}\n\n"
+            f"EXISTING TOPICS (reuse one of these names exactly if the request "
+            f"overlaps with an existing topic — do NOT create a new name for "
+            f"content that fits under an existing topic):\n{names_list}"
+        )
 
     for attempt in range(2):
         resp = await client.chat.completions.create(
             model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": GRAMMAR_MODULE_SYSTEM_PROMPT},
-                {"role": "user", "content": description},
+                {"role": "user", "content": user_msg},
             ],
             temperature=0.7,
         )

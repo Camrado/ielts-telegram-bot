@@ -17,6 +17,7 @@ from telegram.ext import (
 from bot.models.grammar import (
     delete_topic_cascade,
     find_duplicate_topic,
+    find_similar_topic,
     get_all_progress,
     get_all_questions,
     get_all_topics,
@@ -1026,23 +1027,35 @@ async def _gat_show_duplicate_warning(
     pending: dict, dup: dict, *, edit_msg=None, reply_msg=None
 ) -> None:
     is_global = dup.get("user_id") is None
+    is_exact = dup["name"].lower() == pending["topic"]["name"].lower()
     pending["duplicate_id"] = dup["id"]
     pending["duplicate_is_global"] = is_global
 
+    match_note = ""
+    if not is_exact:
+        match_note = (
+            f"\n\n<i>(Your topic \"{html.escape(pending['topic']['name'])}\" "
+            f"looks similar to this one.)</i>"
+        )
+
     if is_global:
         text = (
-            f"⚠️ A built-in topic named '<b>{html.escape(dup['name'])}</b>' "
-            f"already exists.\n\nYou can save with a different name or cancel."
+            f"⚠️ A built-in topic '<b>{html.escape(dup['name'])}</b>' "
+            f"already exists.{match_note}\n\n"
+            f"You can add new rules to it, save with a different name, or cancel."
         )
         kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Add to Existing", callback_data="gat_dup_merge")],
             [InlineKeyboardButton("📝 Save as New (rename)", callback_data="gat_dup_rename")],
             [InlineKeyboardButton("❌ Cancel", callback_data="gat_dup_cancel")],
         ])
     else:
         text = (
-            f"⚠️ A topic named '<b>{html.escape(dup['name'])}</b>' already exists."
+            f"⚠️ A topic named '<b>{html.escape(dup['name'])}</b>' "
+            f"already exists.{match_note}"
         )
         kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Add to Existing", callback_data="gat_dup_merge")],
             [InlineKeyboardButton("🔄 Replace Existing", callback_data="gat_dup_replace")],
             [InlineKeyboardButton("📝 Save as New (rename)", callback_data="gat_dup_rename")],
             [InlineKeyboardButton("❌ Cancel", callback_data="gat_dup_cancel")],
@@ -1062,7 +1075,7 @@ async def _gat_check_and_save(
     pending["save_mode"] = save_mode
 
     if pending["topic_db_id"] is None:
-        dup = await find_duplicate_topic(
+        dup = await find_similar_topic(
             pending["user_db_id"], pending["topic"]["name"]
         )
         if dup:
@@ -1117,8 +1130,11 @@ async def gat_receive_description(
     description = update.message.text.strip()
     msg = await update.message.reply_text("⏳ Generating grammar module...")
 
+    all_topics = await get_all_topics(pending["user_db_id"])
+    existing_names = [t["name"] for t in all_topics]
+
     try:
-        data = await generate_grammar_module(description)
+        data = await generate_grammar_module(description, existing_names)
     except Exception as e:
         logger.error("Grammar module generation failed: %s", e)
         await msg.edit_text(
@@ -1261,6 +1277,28 @@ async def gat_noop(
 # ── Duplicate handling ─────────────────────────────────────────────────────
 
 
+async def gat_dup_merge(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    pending = _gat_pending(context)
+    if not pending:
+        await query.edit_message_text(
+            "Session expired.", reply_markup=BACK_TO_GRAMMAR
+        )
+        return ConversationHandler.END
+
+    pending["topic_db_id"] = pending["duplicate_id"]
+    pending["topic"]["name"] = (
+        await get_topic_by_id(pending["duplicate_id"], pending["user_db_id"])
+    )["name"]
+    pending.pop("duplicate_id", None)
+    return await _gat_execute_save(
+        context, pending["save_mode"], edit_msg=query.message
+    )
+
+
 async def gat_dup_replace(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
@@ -1392,6 +1430,9 @@ def build_grammar_add_topic_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(gat_noop, pattern="^gat_noop$"),
             ],
             GAT_DUPLICATE: [
+                CallbackQueryHandler(
+                    gat_dup_merge, pattern="^gat_dup_merge$"
+                ),
                 CallbackQueryHandler(
                     gat_dup_replace, pattern="^gat_dup_replace$"
                 ),
