@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 BAKU_TZ = timezone(timedelta(hours=4))
 
+_scheduler: AsyncIOScheduler | None = None
+
 REMINDER_KEYBOARD = InlineKeyboardMarkup([
     [
         InlineKeyboardButton("📚 Start Review", callback_data="vocab_flashcards"),
@@ -42,6 +44,7 @@ REMINDER_MESSAGES = {
 
 
 async def send_reminders(bot, reminder_slot: str) -> None:
+    logger.info("Reminder job fired for slot: %s", reminder_slot)
     try:
         pool = get_pool()
     except RuntimeError:
@@ -53,11 +56,14 @@ async def send_reminders(bot, reminder_slot: str) -> None:
                   current_streak, reminders_enabled
            FROM users"""
     )
+    logger.info("Reminder slot %s — %d users fetched", reminder_slot, len(rows))
 
     for user in rows:
         if not user["reminders_enabled"]:
+            logger.debug("User %d: reminders disabled, skipping", user["telegram_user_id"])
             continue
         if user["last_active_today"]:
+            logger.debug("User %d: already active today, skipping", user["telegram_user_id"])
             continue
 
         user_id = user["id"]
@@ -107,6 +113,8 @@ async def reset_daily_activity() -> None:
 
 
 def setup_scheduler(bot) -> AsyncIOScheduler:
+    global _scheduler
+
     scheduler = AsyncIOScheduler()
 
     for hour, slot in [(10, "morning"), (14, "afternoon"), (19, "evening"), (21, "last_call")]:
@@ -126,5 +134,9 @@ def setup_scheduler(bot) -> AsyncIOScheduler:
     )
 
     scheduler.start()
-    logger.info("Reminder scheduler started with 4 daily slots + midnight reset")
+    _scheduler = scheduler
+
+    for job in scheduler.get_jobs():
+        logger.info("Scheduled job %s — next fire: %s", job.id, job.next_run_time)
+
     return scheduler
