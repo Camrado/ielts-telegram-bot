@@ -4,6 +4,7 @@ import random
 import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -258,7 +259,7 @@ async def _show_card(
         bottom_row.append(InlineKeyboardButton("💡 Hint", callback_data="fc_hint"))
     bottom_row.append(InlineKeyboardButton("❌ Quit", callback_data="fc_quit"))
     if kb:
-        kb = InlineKeyboardMarkup(kb.inline_keyboard + [idk_row, bottom_row])
+        kb = InlineKeyboardMarkup(list(kb.inline_keyboard) + [idk_row, bottom_row])
     else:
         kb = InlineKeyboardMarkup([idk_row, bottom_row])
 
@@ -267,10 +268,17 @@ async def _show_card(
     prefix = "📚 Review" if ses["mode"] == "flashcard" else "🎯 Quiz"
     text = f"{prefix}: {cur}/{total}\n\n{question}"
 
+    chat = update.effective_chat.id
     if edit_message:
-        await edit_message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        try:
+            await edit_message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except TelegramError:
+            try:
+                await edit_message.delete()
+            except TelegramError:
+                pass
+            await ctx.bot.send_message(chat, text, reply_markup=kb, parse_mode="HTML")
     else:
-        chat = update.effective_chat.id
         await ctx.bot.send_message(chat, text, reply_markup=kb, parse_mode="HTML")
 
     return FC_WAITING_ANSWER
@@ -472,12 +480,31 @@ async def _handle_answer(
     if is_correct:
         result = "✅ Correct!"
     else:
-        result = f"❌ The answer was: <b>{html.escape(correct_answer)}</b>"
+        card = ses["cards"][ses["current"]]
+        word = html.escape(card.get("word_phrase", correct_answer))
+        result = f"❌ The answer was: <b>{html.escape(correct_answer)}</b>\n"
+        result += f"\n📘 <b>{word}</b>"
+        if card.get("definition"):
+            result += f"\n📖 <b>Definition:</b> {html.escape(card['definition'])}"
+        if card.get("synonyms"):
+            result += f"\n🔄 <b>Synonyms:</b> {html.escape(card['synonyms'])}"
+        if card.get("collocations"):
+            result += f"\n🤝 <b>Collocations:</b> {html.escape(card['collocations'])}"
+        if card.get("example"):
+            result += f"\n📝 <b>Example:</b> <i>{html.escape(card['example'])}</i>"
 
     text = f"{result}\n\nProgress: {answered}/{total} | Session accuracy: {accuracy}%"
 
+    chat = update.effective_chat.id
     if edit_message:
-        await edit_message.edit_text(text, reply_markup=_result_kb(), parse_mode="HTML")
+        try:
+            await edit_message.edit_text(text, reply_markup=_result_kb(), parse_mode="HTML")
+        except TelegramError:
+            try:
+                await edit_message.delete()
+            except TelegramError:
+                pass
+            await ctx.bot.send_message(chat, text, reply_markup=_result_kb(), parse_mode="HTML")
     else:
         await update.message.reply_text(text, reply_markup=_result_kb(), parse_mode="HTML")
 
