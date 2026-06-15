@@ -254,5 +254,6 @@ class OpenAIContentGeneratorService:
             logger.warning(
                 "AI answer check failed for '%s', falling back to incorrect",
                 user_answer,
+                exc_info=True,
             )
             return False
