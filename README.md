@@ -7,6 +7,7 @@ A Telegram bot for IELTS exam preparation with AI-powered content generation, sp
 ## Features
 
 ### Vocabulary
+
 - **Flashcard Review** — SM-2 spaced repetition algorithm schedules cards at optimal intervals (learning → young → mature)
 - **Quizzes** — Practice mode that doesn't interfere with your SRS schedule
 - **Add Single Word** — AI generates definition, synonyms, collocations, example sentences, and CEFR level automatically
@@ -14,12 +15,14 @@ A Telegram bot for IELTS exam preparation with AI-powered content generation, sp
 - **Stats** — Progress breakdown by CEFR level, accuracy, and streak
 
 ### Grammar
+
 - **Learn** — Browse rules with examples, tips, and navigate between topics
 - **Quizzes** — Three modes: by topic, mixed, or weak areas only
 - **Add Topic** — Generate a new grammar topic (rules + practice questions) with a single prompt
 - **Stats** — Mastery percentage and accuracy per topic
 
 ### General
+
 - Daily reminders (4 configurable slots, skipped if you already studied today)
 - Streak tracking across both vocabulary and grammar
 - Smart menu cleanup — old messages are removed to keep the chat tidy
@@ -29,16 +32,16 @@ A Telegram bot for IELTS exam preparation with AI-powered content generation, sp
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Language | Python 3.12 (fully async) |
-| Telegram | python-telegram-bot 21 |
-| Database | PostgreSQL + asyncpg (connection pool) |
-| AI | OpenAI API (GPT) |
-| Scheduling | APScheduler 3 (cron jobs) |
-| File Parsing | openpyxl, csv |
-| SRS Algorithm | SM-2 |
-| Containerization | Docker |
+| Layer            | Technology                             |
+| ---------------- | -------------------------------------- |
+| Language         | Python 3.12 (fully async)              |
+| Telegram         | python-telegram-bot 21                 |
+| Database         | PostgreSQL + asyncpg (connection pool) |
+| AI               | OpenAI API (GPT)                       |
+| Scheduling       | APScheduler 3 (cron jobs)              |
+| File Parsing     | openpyxl, csv                          |
+| SRS Algorithm    | SM-2                                   |
+| Containerization | Docker                                 |
 
 ---
 
@@ -127,32 +130,20 @@ docker run --env-file .env ielts-bot
 
 ## Environment Variables
 
-| Variable | Description |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | Token from @BotFather |
-| `DATABASE_URL` | PostgreSQL connection string (`postgresql://user:pass@host:5432/db`) |
-| `OPENAI_API_KEY` | OpenAI API key |
+| Variable             | Description                                                          |
+| -------------------- | -------------------------------------------------------------------- |
+| `TELEGRAM_BOT_TOKEN` | Token from @BotFather                                                |
+| `DATABASE_URL`       | PostgreSQL connection string (`postgresql://user:pass@host:5432/db`) |
+| `OPENAI_API_KEY`     | OpenAI API key                                                       |
 
 ---
 
 ## Commands
 
-| Command | Description |
-|---|---|
-| `/start` | Open the main menu |
-| `/help` | Show help text |
-| `/stats` | View your overall progress |
-| `/review` | Jump directly to flashcard review |
+| Command      | Description                         |
+| ------------ | ----------------------------------- |
+| `/start`     | Open the main menu                  |
+| `/help`      | Show help text                      |
+| `/stats`     | View your overall progress          |
+| `/review`    | Jump directly to flashcard review   |
 | `/reminders` | Toggle daily reminder notifications |
-
----
-
-## Project Status
-
-Active development. Core vocabulary and grammar flows are fully functional. Planned improvements include webhook support for production deployments and a test suite covering the SRS logic and file parsing edge cases.
-
----
-
-## License
-
-MIT
