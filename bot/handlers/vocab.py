@@ -26,7 +26,7 @@ from bot.repositories.vocabulary import (
 )
 from bot.handlers.menu_utils import refresh_menu
 from bot.inject import inject
-from bot.services.ai.content_generator_service import ContentGeneratorServiceService
+from bot.services.ai.content_generator_service import ContentGeneratorService
 from bot.services.file_parser_service import get_temp_path, parse_file
 
 logger = logging.getLogger(__name__)
