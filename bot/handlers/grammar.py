@@ -34,7 +34,7 @@ from bot.repositories.grammar import (
 from bot.handlers.menu_utils import refresh_menu
 from bot.inject import inject
 from bot.repositories.review_log import get_grammar_stats_7days, log_grammar_review
-from bot.services.ai.content_generator_service import ContentGeneratorServiceService
+from bot.services.ai.content_generator_service import ContentGeneratorService
 from bot.repositories.user import get_or_create_user, update_streak
 from bot.utils import levenshtein
 

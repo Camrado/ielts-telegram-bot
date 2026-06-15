@@ -28,7 +28,7 @@ from bot.repositories.vocabulary import (
     get_random_user_words,
 )
 from bot.inject import inject
-from bot.services.ai.content_generator_service import ContentGeneratorServiceService
+from bot.services.ai.content_generator_service import ContentGeneratorService
 from bot.services.srs_service import sm2_update
 from bot.utils import levenshtein
 
