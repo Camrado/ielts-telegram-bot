@@ -477,21 +477,21 @@ async def _handle_answer(
     total = ses["total"]
     accuracy = round(ses["correct"] / answered * 100) if answered else 0
 
+    card = ses["cards"][ses["current"]]
+    word = html.escape(card.get("word_phrase", correct_answer))
     if is_correct:
         result = "✅ Correct!"
     else:
-        card = ses["cards"][ses["current"]]
-        word = html.escape(card.get("word_phrase", correct_answer))
-        result = f"❌ The answer was: <b>{html.escape(correct_answer)}</b>\n"
-        result += f"\n📘 <b>{word}</b>"
-        if card.get("definition"):
-            result += f"\n📖 <b>Definition:</b> {html.escape(card['definition'])}"
-        if card.get("synonyms"):
-            result += f"\n🔄 <b>Synonyms:</b> {html.escape(card['synonyms'])}"
-        if card.get("collocations"):
-            result += f"\n🤝 <b>Collocations:</b> {html.escape(card['collocations'])}"
-        if card.get("example"):
-            result += f"\n📝 <b>Example:</b> <i>{html.escape(card['example'])}</i>"
+        result = f"❌ The answer was: <b>{html.escape(correct_answer)}</b>"
+    result += f"\n\n📘 <b>{word}</b>"
+    if card.get("definition"):
+        result += f"\n📖 <b>Definition:</b> {html.escape(card['definition'])}"
+    if card.get("synonyms"):
+        result += f"\n🔄 <b>Synonyms:</b> {html.escape(card['synonyms'])}"
+    if card.get("collocations"):
+        result += f"\n🤝 <b>Collocations:</b> {html.escape(card['collocations'])}"
+    if card.get("example"):
+        result += f"\n📝 <b>Example:</b> <i>{html.escape(card['example'])}</i>"
 
     text = f"{result}\n\nProgress: {answered}/{total} | Session accuracy: {accuracy}%"
 
