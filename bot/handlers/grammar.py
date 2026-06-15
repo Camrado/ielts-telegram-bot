@@ -14,7 +14,7 @@ from telegram.ext import (
     filters,
 )
 
-from bot.models.grammar import (
+from bot.repositories.grammar import (
     delete_topic_cascade,
     find_duplicate_topic,
     find_similar_topic,
@@ -32,9 +32,10 @@ from bot.models.grammar import (
     update_progress,
 )
 from bot.handlers.menu_utils import refresh_menu
-from bot.models.review_log import get_grammar_stats_7days, log_grammar_review
-from bot.models.user import get_or_create_user, update_streak
-from bot.services.ai import generate_grammar_module
+from bot.inject import inject
+from bot.repositories.review_log import get_grammar_stats_7days, log_grammar_review
+from bot.services.ai.content_generator_service import ContentGeneratorServiceService
+from bot.repositories.user import get_or_create_user, update_streak
 from bot.utils import levenshtein
 
 logger = logging.getLogger(__name__)
@@ -1117,8 +1118,9 @@ async def gat_start(
 # ── Description received ──────────────────────────────────────────────────
 
 
+@inject
 async def gat_receive_description(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+    update: Update, context: ContextTypes.DEFAULT_TYPE, ai: ContentGeneratorService = None
 ) -> int:
     pending = _gat_pending(context)
     if not pending:
@@ -1134,7 +1136,7 @@ async def gat_receive_description(
     existing_names = [t["name"] for t in all_topics]
 
     try:
-        data = await generate_grammar_module(description, existing_names)
+        data = await ai.generate_grammar_module(description, existing_names)
     except Exception as e:
         logger.error("Grammar module generation failed: %s", e)
         await msg.edit_text(

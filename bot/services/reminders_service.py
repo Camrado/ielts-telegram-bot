@@ -8,7 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Forbidden
 
 from bot.database import get_pool
-from bot.models.progress import count_due_now
+from bot.repositories.progress import count_due_now
 
 logger = logging.getLogger(__name__)
 

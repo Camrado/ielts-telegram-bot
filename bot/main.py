@@ -31,8 +31,9 @@ from bot.handlers.vocab import (
     vocab_menu_callback,
     vocab_stats_callback,
 )
+from bot.inject import setup_dependencies
 from bot.seed_grammar import seed as seed_grammar
-from bot.services.reminders import setup_scheduler
+from bot.services.reminders_service import setup_scheduler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -46,6 +47,7 @@ async def post_init(application: Application) -> None:
     await init_db()
     await seed_grammar()
     setup_scheduler(application.bot)
+    setup_dependencies(application.bot_data)
     await application.bot.set_my_commands([
         BotCommand("start", "Open main menu"),
         BotCommand("help", "How to use this bot"),

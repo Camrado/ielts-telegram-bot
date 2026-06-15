@@ -14,21 +14,22 @@ from telegram.ext import (
 )
 
 from bot.handlers.menu_utils import delete_old_menu
-from bot.models.progress import (
+from bot.repositories.progress import (
     count_due_tomorrow,
     get_due_cards,
     get_earliest_review,
     update_vocab_progress,
 )
-from bot.models.review_log import log_vocab_review
-from bot.models.user import get_or_create_user, update_streak
-from bot.models.vocabulary import (
+from bot.repositories.review_log import log_vocab_review
+from bot.repositories.user import get_or_create_user, update_streak
+from bot.repositories.vocabulary import (
     count_user_words,
     get_random_distractors,
     get_random_user_words,
 )
-from bot.services.ai import check_vocab_answer
-from bot.services.srs import sm2_update
+from bot.inject import inject
+from bot.services.ai.content_generator_service import ContentGeneratorServiceService
+from bot.services.srs_service import sm2_update
 from bot.utils import levenshtein
 
 logger = logging.getLogger(__name__)
@@ -514,8 +515,9 @@ async def show_hint(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return FC_WAITING_ANSWER
 
 
+@inject
 async def process_text_answer(
-    update: Update, ctx: ContextTypes.DEFAULT_TYPE
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE, ai: ContentGeneratorService = None
 ) -> int:
     ses = _session(ctx)
     if not ses:
@@ -535,7 +537,7 @@ async def process_text_answer(
         if _check_synonyms(user_text, card):
             is_correct = True
         elif card.get("definition"):
-            is_correct = await check_vocab_answer(
+            is_correct = await ai.check_vocab_answer(
                 card["definition"], ses["correct_answer"], user_text,
             )
 

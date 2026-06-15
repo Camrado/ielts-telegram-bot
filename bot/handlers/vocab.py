@@ -13,10 +13,10 @@ from telegram.ext import (
     filters,
 )
 
-from bot.models.progress import create_vocab_progress, get_srs_status, get_vocab_by_level
-from bot.models.review_log import get_new_words_7days, get_vocab_stats_7days
-from bot.models.user import get_or_create_user, get_user_streak
-from bot.models.vocabulary import (
+from bot.repositories.progress import create_vocab_progress, get_srs_status, get_vocab_by_level
+from bot.repositories.review_log import get_new_words_7days, get_vocab_stats_7days
+from bot.repositories.user import get_or_create_user, get_user_streak
+from bot.repositories.vocabulary import (
     check_duplicates_bulk,
     count_user_words,
     find_duplicate,
@@ -24,13 +24,10 @@ from bot.models.vocabulary import (
     insert_words_bulk,
     update_word,
 )
-from bot.services.ai import (
-    generate_vocab_entries_bulk,
-    generate_vocab_entries_partial,
-    generate_vocab_entry,
-)
 from bot.handlers.menu_utils import refresh_menu
-from bot.services.file_parser import get_temp_path, parse_file
+from bot.inject import inject
+from bot.services.ai.content_generator_service import ContentGeneratorServiceService
+from bot.services.file_parser_service import get_temp_path, parse_file
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +317,7 @@ async def _generate_and_show(
     word: str,
     provided: dict[str, str],
     message_to_edit=None,
+    ai: ContentGeneratorService = None,
 ) -> int:
     all_fields = ("definition", "synonyms", "collocations", "example", "cefr_level")
     missing = [f for f in all_fields if f not in provided]
@@ -347,7 +345,7 @@ async def _generate_and_show(
         )
 
     try:
-        ai_result = await generate_vocab_entry(word, provided)
+        ai_result = await ai.generate_vocab_entry(word, provided)
         entry = {**ai_result, **provided, "word_phrase": word}
         for f in all_fields:
             entry.setdefault(f, "")
@@ -367,8 +365,9 @@ async def _generate_and_show(
         return ADD_CONFIRM
 
 
+@inject
 async def receive_word(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+    update: Update, context: ContextTypes.DEFAULT_TYPE, ai: ContentGeneratorService = None
 ) -> int:
     user_db_id = await _ensure_user(update)
     raw = update.message.text.strip()
@@ -397,11 +396,12 @@ async def receive_word(
         )
         return ADD_DUPLICATE
 
-    return await _generate_and_show(update, context, word, provided)
+    return await _generate_and_show(update, context, word, provided, ai=ai)
 
 
+@inject
 async def handle_duplicate_update(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+    update: Update, context: ContextTypes.DEFAULT_TYPE, ai: ContentGeneratorService = None
 ) -> int:
     query = update.callback_query
     await query.answer()
@@ -410,12 +410,13 @@ async def handle_duplicate_update(
     word = context.user_data["pending_word"]
     provided = context.user_data["pending_provided"]
     return await _generate_and_show(
-        update, context, word, provided, message_to_edit=query.message
+        update, context, word, provided, message_to_edit=query.message, ai=ai
     )
 
 
+@inject
 async def retry_ai_add(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+    update: Update, context: ContextTypes.DEFAULT_TYPE, ai: ContentGeneratorService = None
 ) -> int:
     query = update.callback_query
     await query.answer("Retrying...")
@@ -423,7 +424,7 @@ async def retry_ai_add(
     word = context.user_data["pending_word"]
     provided = context.user_data["pending_provided"]
     return await _generate_and_show(
-        update, context, word, provided, message_to_edit=query.message
+        update, context, word, provided, message_to_edit=query.message, ai=ai
     )
 
 
@@ -648,8 +649,9 @@ async def bulk_back_to_method(
 # ── Bulk Add: Word List ──────────────────────────────────────────────────────
 
 
+@inject
 async def receive_list(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+    update: Update, context: ContextTypes.DEFAULT_TYPE, ai: ContentGeneratorService = None
 ) -> int:
     user_db_id = await _ensure_user(update)
     raw = update.message.text.strip()
@@ -692,7 +694,7 @@ async def receive_list(
         generated = False
         for attempt in range(2):
             try:
-                entries = await generate_vocab_entries_bulk(batch)
+                entries = await ai.generate_vocab_entries_bulk(batch)
                 all_entries.extend(entries)
                 generated = True
                 break
@@ -749,8 +751,9 @@ async def file_waiting_text(
     return FILE_WAITING
 
 
+@inject
 async def receive_file(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+    update: Update, context: ContextTypes.DEFAULT_TYPE, ai: ContentGeneratorService = None
 ) -> int:
     user_db_id = await _ensure_user(update)
     doc = update.message.document
@@ -780,7 +783,7 @@ async def receive_file(
         return FILE_WAITING
 
     try:
-        return await _process_uploaded_file(update, context, user_db_id, temp_path)
+        return await _process_uploaded_file(update, context, user_db_id, temp_path, ai=ai)
     finally:
         try:
             os.unlink(temp_path)
@@ -793,6 +796,7 @@ async def _process_uploaded_file(
     context: ContextTypes.DEFAULT_TYPE,
     user_db_id: int,
     temp_path: str,
+    ai: ContentGeneratorService = None,
 ) -> int:
     back_kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton("◀️ Back", callback_data="vbulk_back_method")]]
@@ -902,7 +906,7 @@ async def _process_uploaded_file(
         generated = False
         for attempt in range(2):
             try:
-                results = await generate_vocab_entries_bulk(batch_words)
+                results = await ai.generate_vocab_entries_bulk(batch_words)
                 for r in results:
                     r["_source"] = "ai_generated"
                 all_processed.extend(results)
@@ -933,7 +937,7 @@ async def _process_uploaded_file(
         generated = False
         for attempt in range(2):
             try:
-                results = await generate_vocab_entries_partial(batch)
+                results = await ai.generate_vocab_entries_partial(batch)
                 for r in results:
                     r["_source"] = "ai_completed"
                 all_processed.extend(results)

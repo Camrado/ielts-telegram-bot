@@ -4,10 +4,10 @@ from telegram.ext import ContextTypes
 
 from bot.database import get_pool
 from bot.handlers.menu_utils import delete_old_menu, refresh_menu, track_menu
-from bot.models.progress import count_due_now, get_srs_status
-from bot.models.grammar import get_all_progress, get_all_topics
-from bot.models.user import get_or_create_user, get_user_streak
-from bot.models.vocabulary import count_user_words
+from bot.repositories.progress import count_due_now, get_srs_status
+from bot.repositories.grammar import get_all_progress, get_all_topics
+from bot.repositories.user import get_or_create_user, get_user_streak
+from bot.repositories.vocabulary import count_user_words
 
 logger = logging.getLogger(__name__)
 
