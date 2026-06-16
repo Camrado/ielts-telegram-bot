@@ -188,11 +188,11 @@ class OpenAIContentGeneratorService:
                 )
 
     async def generate_grammar_module(
-        self, description: str, existing_topic_names: list[str] | None = None
+        self, description: str, existing_topics: list[dict] | None = None
     ) -> dict:
         client = self._ensure_client()
         user_msg = grammar_prompts.build_module_message(
-            description, existing_topic_names
+            description, existing_topics
         )
 
         for attempt in range(2):

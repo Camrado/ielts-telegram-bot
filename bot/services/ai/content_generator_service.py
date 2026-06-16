@@ -15,7 +15,7 @@ class ContentGeneratorService(Protocol):
     ) -> list[dict[str, str]]: ...
 
     async def generate_grammar_module(
-        self, description: str, existing_topic_names: list[str] | None = None
+        self, description: str, existing_topics: list[dict] | None = None
     ) -> dict: ...
 
     async def check_vocab_answer(

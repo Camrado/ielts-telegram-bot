@@ -148,7 +148,11 @@ def main() -> None:
     app.add_error_handler(error_handler)
 
     logger.info("Starting bot polling…")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        poll_interval=1.0,
+        timeout=30,
+    )
 
 
 if __name__ == "__main__":

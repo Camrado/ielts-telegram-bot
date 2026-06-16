@@ -21,6 +21,7 @@ from bot.repositories.grammar import (
     get_all_progress,
     get_all_questions,
     get_all_topics,
+    get_all_topics_with_rule_titles,
     get_or_create_progress,
     get_questions_for_topic,
     get_questions_for_topics,
@@ -1132,11 +1133,10 @@ async def gat_receive_description(
     description = update.message.text.strip()
     msg = await update.message.reply_text("⏳ Generating grammar module...")
 
-    all_topics = await get_all_topics(pending["user_db_id"])
-    existing_names = [t["name"] for t in all_topics]
+    existing_topics = await get_all_topics_with_rule_titles(pending["user_db_id"])
 
     try:
-        data = await ai.generate_grammar_module(description, existing_names)
+        data = await ai.generate_grammar_module(description, existing_topics)
     except Exception as e:
         logger.error("Grammar module generation failed: %s", e)
         await msg.edit_text(
@@ -1151,10 +1151,22 @@ async def gat_receive_description(
     questions = data.get("questions", [])
 
     if not rules:
-        await msg.edit_text(
-            "❌ No rules were generated. "
-            "Please try a different description, or send /cancel to go back."
-        )
+        topic_name = topic.get("name", "")
+        if topic_name and any(
+            t["name"].lower() == topic_name.lower() and t.get("rule_titles")
+            for t in existing_topics
+        ):
+            await msg.edit_text(
+                f"The topic '<b>{html.escape(topic_name)}</b>' already has "
+                f"comprehensive rules. Try a more specific angle, or send "
+                f"/cancel to go back.",
+                parse_mode="HTML",
+            )
+        else:
+            await msg.edit_text(
+                "❌ No rules were generated. "
+                "Please try a different description, or send /cancel to go back."
+            )
         return GAT_WAITING_DESC
 
     pending.update({

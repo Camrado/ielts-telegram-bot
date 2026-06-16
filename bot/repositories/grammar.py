@@ -204,6 +204,27 @@ async def get_unpracticed_topic_ids(user_db_id: int) -> list[int]:
 # ── Topic generation helpers ──────────────────────────────────────────────
 
 
+async def get_all_topics_with_rule_titles(user_db_id: int) -> list[dict]:
+    pool = get_pool()
+    rows = await pool.fetch(
+        """SELECT t.id, t.name, r.rule_title
+           FROM grammar_topics t
+           LEFT JOIN grammar_rules r
+               ON r.topic_id = t.id AND (r.user_id IS NULL OR r.user_id = $1)
+           WHERE t.user_id IS NULL OR t.user_id = $1
+           ORDER BY t.id, r.sort_order""",
+        user_db_id,
+    )
+    topics: dict[int, dict] = {}
+    for r in rows:
+        tid = r["id"]
+        if tid not in topics:
+            topics[tid] = {"id": tid, "name": r["name"], "rule_titles": []}
+        if r["rule_title"]:
+            topics[tid]["rule_titles"].append(r["rule_title"])
+    return list(topics.values())
+
+
 async def get_all_progress(user_db_id: int) -> list[dict]:
     pool = get_pool()
     rows = await pool.fetch(
